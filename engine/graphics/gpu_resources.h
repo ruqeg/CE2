@@ -1,0 +1,901 @@
+#pragma once
+
+#include <engine/graphics/rhi/rhi.h>
+#include <thirdparty/SPIRV-Reflect/spirv_reflect.h>
+
+#include <engine/graphics/graphics_config.h>
+#include <engine/core/math.h>
+#include <engine/core/alias.h>
+#include <engine/core/array.h>
+#include <engine/core/resource_pool.h>
+
+typedef struct crude_gfx_gpu_time_query_tree crude_gfx_gpu_time_query_tree;
+
+typedef struct crude_gfx_device;
+
+/************************************************
+ *
+ * GPU Resoruces Handles
+ * 
+ ***********************************************/
+typedef uint32 crude_gfx_resource_index;
+
+typedef struct crude_gfx_buffer_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_buffer_handle;
+
+typedef struct crude_gfx_texture_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_texture_handle;
+
+typedef struct crude_gfx_descriptor_set_layout_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_descriptor_set_layout_handle;
+
+typedef struct crude_gfx_descriptor_set_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_descriptor_set_handle;
+
+typedef struct crude_gfx_sampler_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_sampler_handle;
+
+typedef struct crude_gfx_shader_state_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_shader_state_handle;
+
+typedef struct crude_gfx_render_pass_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_render_pass_handle;
+
+typedef struct crude_gfx_pipeline_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_pipeline_handle;
+
+typedef struct crude_gfx_framebuffer_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_framebuffer_handle;
+
+typedef struct crude_gfx_material_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_material_handle;
+
+typedef struct crude_gfx_technique_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_technique_handle;
+
+typedef struct crude_gfx_cmd_pool_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_cmd_pool_handle;
+
+typedef struct crude_gfx_cmd_buffer_handle
+{
+  crude_gfx_resource_index                                 index;
+} crude_gfx_cmd_buffer_handle;
+
+/************************************************
+ *
+ * Invalid GPU Resoruces Handles
+ * 
+ ***********************************************/
+#define CRUDE_GFX_BUFFER_HANDLE_INVALID                    ( CRUDE_COMPOUNT( crude_gfx_buffer_handle, { CRUDE_RESOURCE_INDEX_INVALID } ) )
+#define CRUDE_GFX_TEXTURE_HANDLE_INVALID                   ( CRUDE_COMPOUNT( crude_gfx_texture_handle, { CRUDE_RESOURCE_INDEX_INVALID } ) )
+#define CRUDE_GFX_SAMPLER_HANDLE_INVALID                   ( CRUDE_COMPOUNT( crude_gfx_sampler_handle, { CRUDE_RESOURCE_INDEX_INVALID } ) )
+#define CRUDE_GFX_PIPELINE_HANDLE_INVALID                  ( CRUDE_COMPOUNT( crude_gfx_pipeline_handle, { CRUDE_RESOURCE_INDEX_INVALID } ) )
+#define CRUDE_GFX_SHADER_STATE_HANDLE_INVALID              ( CRUDE_COMPOUNT( crude_gfx_shader_state_handle, { CRUDE_RESOURCE_INDEX_INVALID } ) )
+#define CRUDE_GFX_FRAMEBUFFER_HANDLE_INVALID               ( CRUDE_COMPOUNT( crude_gfx_framebuffer_handle, { CRUDE_RESOURCE_INDEX_INVALID } ) )
+#define CRUDE_GFX_RENDER_PASS_HANDLE_INVALID               ( CRUDE_COMPOUNT( crude_gfx_render_pass_handle, { CRUDE_RESOURCE_INDEX_INVALID } ) )
+#define CRUDE_GFX_DESCRIPTOR_SET_LAYOUT_HANDLE_INVALID     ( CRUDE_COMPOUNT( crude_gfx_descriptor_set_layout_handle, { CRUDE_RESOURCE_INDEX_INVALID } ) )
+#define CRUDE_GFX_DESCRIPTOR_SET_HANDLE_INVALID            ( CRUDE_COMPOUNT( crude_gfx_descriptor_set_handle, { CRUDE_RESOURCE_INDEX_INVALID } ) )
+
+/************************************************
+ *
+ * GPU Resoruces Enums
+ * 
+ ***********************************************/
+typedef enum crude_gfx_resource_usage_type 
+{
+  CRUDE_GFX_RESOURCE_USAGE_TYPE_IMMUTABLE, 
+  CRUDE_GFX_RESOURCE_USAGE_TYPE_DYNAMIC,
+  CRUDE_GFX_RESOURCE_USAGE_TYPE_STREAM,
+  CRUDE_GFX_RESOURCE_USAGE_TYPE_COUNT
+} crude_gfx_resource_usage_type;
+
+typedef enum crude_gfx_texture_type
+{
+  CRUDE_GFX_TEXTURE_TYPE_TEXTURE_1D,
+  CRUDE_GFX_TEXTURE_TYPE_TEXTURE_2D,
+  CRUDE_GFX_TEXTURE_TYPE_TEXTURE_3D,
+  CRUDE_GFX_TEXTURE_TYPE_TEXTURE_1D_ARRAY,
+  CRUDE_GFX_TEXTURE_TYPE_TEXTURE_2D_ARRAY,
+  CRUDE_GFX_TEXTURE_TYPE_TEXTURE_CUBE_ARRAY,
+  CRUDE_GFX_TEXTURE_TYPE_TEXTURE_COUNT,
+ } crude_gfx_texture_type;
+
+typedef enum crude_gfx_color_write_enabled
+{
+  CRUDE_GFX_COLOR_WRITE_ENABLED_RED,
+  CRUDE_GFX_COLOR_WRITE_ENABLED_GREEN,
+  CRUDE_GFX_COLOR_WRITE_ENABLED_BLUE,
+  CRUDE_GFX_COLOR_WRITE_ENABLED_ALPHA,
+  CRUDE_GFX_COLOR_WRITE_ENABLED_ALL,
+  CRUDE_GFX_COLOR_WRITE_ENABLED_COUNT
+} crude_gfx_color_write_enabled;
+
+typedef enum crude_gfx_fill_mode
+{
+  CRUDE_GFX_FILL_MODE_WIREFRAME,
+  CRUDE_GFX_FILL_MODE_SOLID,
+  CRUDE_GFX_FILL_MODE_POINT,
+  CRUDE_GFX_FILL_MODE_COUNT
+} crude_gfx_fill_mode;
+
+typedef enum crude_gfx_render_pass_type
+{
+  CRUDE_GFX_RENDER_PASS_TYPE_GEOMETRY,
+  CRUDE_GFX_RENDER_PASS_TYPE_SWAPCHAIN,
+  CRUDE_GFX_RENDER_PASS_TYPE_COMPUTE
+} crude_gfx_render_pass_type;
+
+typedef enum crude_gfx_render_pass_operation
+{
+  CRUDE_GFX_RENDER_PASS_OPERATION_DONT_CARE,
+  CRUDE_GFX_RENDER_PASS_OPERATION_LOAD,
+  CRUDE_GFX_RENDER_PASS_OPERATION_CLEAR,
+  CRUDE_GFX_RENDER_PASS_OPERATION_COUNT
+} crude_gfx_render_pass_operation;
+
+typedef enum crude_gfx_resource_deletion_type
+{
+  CRUDE_GFX_RESOURCE_DELETION_TYPE_BUFFER,
+  CRUDE_GFX_RESOURCE_DELETION_TYPE_TEXTURE,
+  CRUDE_GFX_RESOURCE_DELETION_TYPE_PIPELINE,
+  CRUDE_GFX_RESOURCE_DELETION_TYPE_SAMPLER,
+  CRUDE_GFX_RESOURCE_DELETION_TYPE_DESCRIPTOR_SET_LAYOUT,
+  CRUDE_GFX_RESOURCE_DELETION_TYPE_DESCRIPTOR_SET,
+  CRUDE_GFX_RESOURCE_DELETION_TYPE_RENDER_PASS,
+  CRUDE_GFX_RESOURCE_DELETION_TYPE_SHADER_STATE,
+  CRUDE_GFX_RESOURCE_DELETION_TYPE_FRAMEBUFFER,
+  CRUDE_GFX_RESOURCE_DELETION_TYPE_COUNT
+} crude_gfx_resource_deletion_type;
+
+typedef enum crude_gfx_texture_mask
+{
+  CRUDE_GFX_TEXTURE_MASK_DEFAULT = 1 << 0,
+  CRUDE_GFX_TEXTURE_MASK_RENDER_TARGET = 1 << 1,
+  CRUDE_GFX_TEXTURE_MASK_COMPUTE = 1 << 2
+} crude_gfx_texture_mask;
+
+typedef enum crude_gfx_vertex_component_format
+{
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_FLOAT,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_FLOAT2,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_FLOAT3,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_FLOAT4,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_MAT4,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_BYTE,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_BYTE4N,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_UBYTE,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_UBYTE4N,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_SHORT2,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_SHORT2N,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_SHORT4,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_SHORT4N,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_UINT,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_UINT2,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_UINT4,
+  CRUDE_GFX_VERTEX_COMPONENT_FORMAT_COUNT
+} crude_gfx_vertex_component_format;
+    
+typedef enum crude_gfx_vertex_input_rate
+{
+  CRUDE_GFX_VERTEX_INPUT_RATE_PER_VERTEX,
+  CRUDE_GFX_VERTEX_INPUT_RATE_PER_INSTANCE,
+  CRUDE_GFX_VERTEX_INPUT_RATE_COUNT,
+} crude_gfx_vertex_input_rate;
+
+typedef enum crude_gfx_pipeline_type
+{
+  CRUDE_GFX_PIPELINE_TYPE_CLASSIC,
+  CRUDE_GFX_PIPELINE_TYPE_TASK,
+  CRUDE_GFX_PIPELINE_TYPE_COMPUTE,
+  CRUDE_GFX_PIPELINE_TYPE_RAY_TRACING,
+  CRUDE_GFX_PIPELINE_TYPE_COUNT
+} crude_gfx_pipeline_type;
+
+/************************************************
+ *
+ * GPU Resoruces Structs
+ * 
+ ***********************************************/
+typedef struct crude_gfx_rect2d_int
+{
+  int16                                                    x;
+  int16                                                    y;
+  uint16                                                   width;
+  uint16                                                   height;
+} crude_gfx_rect2d_int;
+
+typedef struct crude_gfx_viewport
+{
+  crude_gfx_rect2d_int                                     rect;
+  float32                                                  min_depth;
+  float32                                                  max_depth;
+} crude_gfx_viewport;
+
+typedef struct crude_gfx_rhi_stencil_operation_state
+{
+  crude_gfx_rhi_stencil_op                                 fail;
+  crude_gfx_rhi_stencil_op                                 pass;
+  crude_gfx_rhi_stencil_op                                 depth_fail;
+  crude_gfx_rhi_compare_op                                 compare;
+  uint32                                                   compare_mask;
+  uint32                                                   write_mask;
+  uint32                                                   reference;
+} crude_gfx_rhi_stencil_operation_state;
+
+typedef struct crude_gfx_blend_state
+{
+  crude_gfx_rhi_blend_factor                               source_color;
+  crude_gfx_rhi_blend_factor                               destination_color;
+  crude_gfx_rhi_blend_op                                   color_operation;
+  crude_gfx_rhi_blend_factor                               source_alpha;
+  crude_gfx_rhi_blend_factor                               destination_alpha;
+  crude_gfx_rhi_blend_op                                   alpha_operation;
+  crude_gfx_color_write_enabled                            color_write_mask;
+  uint8                                                    blend_enabled   : 1;
+  uint8                                                    separate_blend  : 1;
+  uint8                                                    pad             : 6;
+} crude_gfx_blend_state;
+
+
+typedef struct crude_gfx_sampler_creation
+{
+  crude_gfx_rhi_filter                                     min_filter;
+  crude_gfx_rhi_filter                                     mag_filter;
+  crude_gfx_rhi_sampler_mipmap_mode                        mip_filter;
+  crude_gfx_rhi_sampler_address_mode                       address_mode_u;
+  crude_gfx_rhi_sampler_address_mode                       address_mode_v;
+  crude_gfx_rhi_sampler_address_mode                       address_mode_w;
+  crude_gfx_rhi_sampler_reduction_mode                     reduction_mode;
+  const char*                                              name;
+} crude_gfx_sampler_creation;
+
+typedef struct crude_gfx_buffer_creation
+{
+  crude_gfx_rhi_buffer_usage_flags                         type_flags;
+  crude_gfx_resource_usage_type                            usage;
+  uint32                                                   size;
+  bool                                                     persistent;
+  void                                                    *initial_data;
+  char                                                     name[ CRUDE_GFX_BUFFER_NAME_MAX ];
+  bool                                                     device_only;
+} crude_gfx_buffer_creation;
+
+typedef struct crude_gfx_render_pass_creation
+{
+  uint16                                                   num_render_targets;
+  crude_gfx_rhi_format                                     color_formats[ CRUDE_GFX_IMAGE_OUTPUTS_MAX_COUNT ];
+  crude_gfx_render_pass_operation                          color_operations[ CRUDE_GFX_IMAGE_OUTPUTS_MAX_COUNT ];
+  crude_gfx_rhi_image_layout                               color_final_layouts[ CRUDE_GFX_IMAGE_OUTPUTS_MAX_COUNT ];
+  crude_gfx_rhi_format                                     depth_stencil_format;
+  crude_gfx_rhi_image_layout                               depth_stencil_final_layout;
+  
+  crude_gfx_render_pass_operation                          depth_operation;
+  crude_gfx_render_pass_operation                          stencil_operation;
+  
+  char const                                              *name;
+} crude_gfx_render_pass_creation;
+
+typedef struct crude_gfx_framebuffer_creation
+{
+  char                                                     name[ CRUDE_GFX_FRAMEBUFFER_NAME_MAX_LENGTH ];
+  crude_gfx_texture_handle                                 output_textures[ CRUDE_GFX_IMAGE_OUTPUTS_MAX_COUNT ];
+  crude_gfx_texture_handle                                 depth_stencil_texture;
+  uint32                                                   num_render_targets;
+  bool                                                     manual_resources_free;
+  uint32                                                   width;
+  uint32                                                   height;
+  uint8                                                    resize;
+} crude_gfx_framebuffer_creation;
+
+typedef struct crude_gfx_cmd_pool_creation
+{
+  crude_gfx_rhi_queue                                      queue;
+#if CRUDE_GFX_GPU_PROFILER
+  struct
+  {
+    bool                                                   enabled;
+    crude_gfx_gpu_time_query_tree                         *time_queries_trees;
+    uint32                                                 time_queries_per_frame;
+  } profiler;
+#endif
+} crude_gfx_cmd_pool_creation;
+
+typedef struct crude_gfx_depth_stencil_creation
+{
+  crude_gfx_rhi_stencil_operation_state                    front;
+  crude_gfx_rhi_stencil_operation_state                    back;
+  crude_gfx_rhi_compare_op                                 depth_comparison;
+  uint8                                                    depth_enable        : 1;
+  uint8                                                    depth_write_enable  : 1;
+  uint8                                                    stencil_enable      : 1;
+  uint8                                                    pad                 : 5;
+} crude_gfx_depth_stencil_creation;
+
+typedef struct crude_gfx_blend_state_creation
+{
+  crude_gfx_blend_state                                    blend_states[ CRUDE_GFX_IMAGE_OUTPUTS_MAX_COUNT ];
+  uint32                                                   active_states;
+} crude_gfx_blend_state_creation;
+
+typedef struct crude_gfx_multisample_creation
+{
+  bool                                                     enabled;
+} crude_gfx_multisample_creation;
+
+typedef struct crude_gfx_rasterization_creation
+{
+  crude_gfx_rhi_cull_mode_flags                            cull_mode;
+  crude_gfx_rhi_front_face                                 front;
+  crude_gfx_fill_mode                                      fill;
+  float32                                                  depth_bias_constant_factor;
+  float32                                                  depth_bias_clamp;
+  float32                                                  depth_bias_slope_factor;
+  bool                                                     depth_bias_enable;
+} crude_gfx_rasterization_creation;
+
+typedef struct crude_gfx_texture_subresource
+{
+  uint16                                                   mip_base_level;
+  uint16                                                   mip_level_count;
+  uint16                                                   array_base_layer;
+  uint16                                                   array_layer_count;
+} crude_gfx_texture_subresource;
+
+typedef struct crude_gfx_texture_creation
+{
+  void                                                    *initial_data;
+  uint32                                                   width;
+  uint32                                                   height;
+  uint16                                                   depth;
+  crude_gfx_texture_subresource                            subresource;
+  uint8                                                    flags;
+  crude_gfx_rhi_format                                     format;
+  crude_gfx_texture_type                                   type;
+  crude_gfx_texture_handle                                 alias;
+  bool                                                     multisampled;
+  char                                                     name[ CRUDE_GFX_TEXTURE_NAME_MAX ];
+} crude_gfx_texture_creation;
+
+typedef struct crude_gfx_texture_view_creation
+{
+  crude_gfx_texture_handle                                 parent_texture_handle;
+  crude_gfx_rhi_image_view_type                            view_type;
+  crude_gfx_texture_subresource                            subresource;
+  char const                                              *name;
+} crude_gfx_texture_view_creation;
+
+typedef struct crude_gfx_render_pass_output
+{
+  crude_gfx_rhi_format                                     color_formats[ CRUDE_GFX_IMAGE_OUTPUTS_MAX_COUNT ];
+  crude_gfx_rhi_image_layout                               color_final_layouts[ CRUDE_GFX_IMAGE_OUTPUTS_MAX_COUNT ];
+  crude_gfx_render_pass_operation                          color_operations[ CRUDE_GFX_IMAGE_OUTPUTS_MAX_COUNT ];
+  
+  crude_gfx_rhi_format                                     depth_stencil_format;
+  crude_gfx_rhi_image_layout                               depth_stencil_final_layout;
+  uint32                                                   num_color_formats;
+
+  crude_gfx_render_pass_operation                          depth_operation;
+  crude_gfx_render_pass_operation                          stencil_operation;
+} crude_gfx_render_pass_output;
+
+typedef struct crude_gfx_vertex_attribute
+{
+  uint32                                                   location;
+  uint32                                                   binding;
+  uint32                                                   offset;
+  crude_gfx_vertex_component_format                        format;
+} crude_gfx_vertex_attribute;
+
+typedef struct crude_gfx_vertex_stream
+{
+  uint32                                                   binding;
+  uint32                                                   stride;
+  crude_gfx_vertex_input_rate                              input_rate;
+} crude_gfx_vertex_stream;
+
+typedef struct crude_gfx_shader_stage
+{
+  char const                                              *code;
+  uint32                                                   code_size;
+  crude_gfx_rhi_shader_stage_flag_bits                     type;
+} crude_gfx_shader_stage; 
+
+typedef struct crude_gfx_shader_state_creation
+{
+  crude_gfx_shader_stage                                   stages[ CRUDE_GFX_RHI_SHADER_STAGES_MAX_COUNT ];
+  char const                                              *name;
+  char const                                              *define_name;
+  uint32                                                   define_flags;
+  uint32                                                   stages_count;
+  uint32                                                   optimized;
+  bool                                                     compiled;
+} crude_gfx_shader_state_creation;
+
+typedef struct crude_gfx_viewport_state
+{
+  uint32                                                   num_viewports;
+  uint32                                                   num_scissors;
+  crude_gfx_viewport                                      *dev_viewport;
+  crude_gfx_rect2d_int                                    *scissors;
+} crude_gfx_viewport_state;
+
+typedef struct crude_gfx_descriptor_set_layout_binding
+{
+  crude_gfx_rhi_descriptor_type                            type;
+  uint16                                                   start;
+  uint16                                                   count;
+} crude_gfx_descriptor_set_layout_binding;
+
+typedef struct crude_gfx_descriptor_set_layout_creation
+{
+  crude_gfx_descriptor_set_layout_binding                  bindings[ CRUDE_GFX_DESCRIPTORS_PER_SET_MAX_COUNT ];
+  uint32                                                   num_bindings;
+  uint32                                                   set_index;
+  char const                                              *name;
+  bool                                                     bindless;
+} crude_gfx_descriptor_set_layout_creation;
+
+typedef struct crude_gfx_pipeline_creation
+{
+  crude_gfx_multisample_creation                           multisample;
+  crude_gfx_rasterization_creation                         rasterization;
+  crude_gfx_depth_stencil_creation                         depth_stencil;
+  crude_gfx_blend_state_creation                           blend_state;
+  crude_gfx_shader_state_creation                          shaders;
+  crude_gfx_render_pass_output                             render_pass_output;
+  bool                                                     relfect_vertex_input;
+  crude_gfx_vertex_stream                                  vertex_streams[ 8 ];
+  crude_gfx_vertex_attribute                               vertex_attributes[ 8 ];
+  uint32                                                   vertex_streams_num;
+  uint32                                                   vertex_attributes_num;
+  crude_gfx_rhi_primitive_topology                         topology;
+  crude_gfx_viewport_state const                          *dev_viewport;
+  char const                                              *name;
+} crude_gfx_pipeline_creation;
+
+typedef struct crude_gfx_descriptor_set_creation
+{
+  crude_gfx_resource_index                                 resources[ CRUDE_GFX_DESCRIPTORS_PER_SET_MAX_COUNT ];
+  crude_gfx_sampler_handle                                 samplers[ CRUDE_GFX_DESCRIPTORS_PER_SET_MAX_COUNT ];
+  uint16                                                   bindings[ CRUDE_GFX_DESCRIPTORS_PER_SET_MAX_COUNT ];
+  crude_gfx_descriptor_set_layout_handle                   layout;
+  uint32                                                   num_resources;
+  char const                                              *name;
+#if CRUDE_GFX_RAY_TRACING_ENABLED
+  crude_gfx_rhi_acceleration_structure                     rhi_acceleration_structure;
+#endif /* CRUDE_GFX_RAY_TRACING_ENABLED */
+} crude_gfx_descriptor_set_creation;
+
+typedef struct crude_gfx_shader_descriptor_reflect
+{
+  uint32                                                   sets_count;
+  crude_gfx_descriptor_set_layout_creation                 sets[ CRUDE_GFX_SET_MAX_COUNT ];
+} crude_gfx_shader_descriptor_reflect;
+
+typedef struct crude_gfx_shader_input_reflect
+{
+  crude_gfx_vertex_stream                                 *vertex_streams;
+  crude_gfx_vertex_attribute                              *vertex_attributes;
+} crude_gfx_shader_input_reflect;
+
+typedef struct crude_gfx_shader_push_constant_reflect
+{
+  uint32                                                   stride;
+} crude_gfx_shader_push_constant_reflect;
+
+typedef struct crude_gfx_shader_reflect
+{
+  crude_gfx_shader_descriptor_reflect                      descriptor;
+  crude_gfx_shader_input_reflect                           input;
+  crude_gfx_shader_push_constant_reflect                   push_constant;
+} crude_gfx_shader_reflect;
+
+typedef struct crude_gfx_buffer
+{
+  crude_gfx_rhi_buffer                                     rhi_buffer;
+  crude_gfx_rhi_buffer_usage_flags                         type_flags;
+  crude_gfx_resource_usage_type                            usage;
+  uint32                                                   size;
+  crude_gfx_buffer_handle                                  handle;
+  char                                                     name[ CRUDE_GFX_BUFFER_NAME_MAX ];
+  uint8                                                   *mapped_data;
+  bool                                                     ready;
+} crude_gfx_buffer;
+
+typedef struct crude_gfx_sampler
+{
+  crude_gfx_rhi_sampler                                    rhi_sampler;
+  crude_gfx_rhi_filter                                     min_filter;
+  crude_gfx_rhi_filter                                     mag_filter;
+  crude_gfx_rhi_sampler_mipmap_mode                        mip_filter;
+  crude_gfx_rhi_sampler_address_mode                       address_mode_u;
+  crude_gfx_rhi_sampler_address_mode                       address_mode_v;
+  crude_gfx_rhi_sampler_address_mode                       address_mode_w;
+  char const                                              *name;
+} crude_gfx_sampler;
+
+typedef struct crude_gfx_texture
+{
+  crude_gfx_rhi_image                                      rhi_image;
+  crude_gfx_rhi_image_view                                 rhi_image_view;
+  crude_gfx_rhi_format                                     format;
+  uint32                                                   width;
+  uint32                                                   height;
+  uint16                                                   depth;
+  crude_gfx_texture_subresource                            subresource;
+  uint8                                                    flags;
+  crude_gfx_texture_handle                                 handle;
+  crude_gfx_texture_type                                   type;
+  crude_gfx_sampler                                       *sampler;
+  char                                                     name[ CRUDE_GFX_TEXTURE_NAME_MAX ];
+  crude_gfx_rhi_resource_state                             state;
+  bool                                                     ready;
+  crude_gfx_texture_handle                                 parent_texture_handle;
+  crude_gfx_texture_handle                                 alias_texture_handle;
+} crude_gfx_texture;
+
+typedef struct crude_gfx_descriptor_binding
+{
+  crude_gfx_rhi_descriptor_type                            type;
+  uint16                                                   start;
+  uint16                                                   count;
+  uint16                                                   set;
+  const char                                              *name;
+} crude_gfx_descriptor_binding;
+
+typedef struct crude_gfx_descriptor_set_layout
+{
+  crude_gfx_rhi_descriptor_pool                            rhi_descriptor_pool;
+  crude_gfx_rhi_descriptor_set_layout                      rhi_descriptor_set_layout;
+  crude_gfx_rhi_descriptor_set_layout_binding             *rhi_bindings;
+  crude_gfx_descriptor_binding                            *bindings;
+  uint8                                                    binding_to_index[ CRUDE_GFX_DESCRIPTORS_PER_SET_MAX_COUNT ];
+  uint16                                                   num_bindings;
+  uint16                                                   set_index;
+  crude_gfx_descriptor_set_layout_handle                   handle;
+  bool                                                     bindless;
+} crude_gfx_descriptor_set_layout;
+
+typedef struct crude_gfx_descriptor_set
+{
+  crude_gfx_rhi_descriptor_set                             rhi_descriptor_set;
+  crude_gfx_resource_index                                 resources[ CRUDE_GFX_DESCRIPTORS_PER_SET_MAX_COUNT ];
+  crude_gfx_sampler_handle                                 samplers[ CRUDE_GFX_DESCRIPTORS_PER_SET_MAX_COUNT ];
+  uint16                                                   bindings[ CRUDE_GFX_DESCRIPTORS_PER_SET_MAX_COUNT ];
+  crude_gfx_descriptor_set_layout const                   *layout;
+  uint32                                                   num_resources;
+  char const                                              *name;
+#if CRUDE_GFX_RAY_TRACING_ENABLED
+  crude_gfx_rhi_acceleration_structure                     rhi_acceleration_structure;
+#endif /* CRUDE_GFX_RAY_TRACING_ENABLED */
+} crude_gfx_descriptor_set;
+
+typedef struct crude_gfx_pipeline
+{
+  crude_gfx_rhi_pipeline                                   rhi_pipeline;
+  crude_gfx_rhi_pipeline_layout                            rhi_pipeline_layout;
+  crude_gfx_rhi_pipeline_bind_point                        bind_point;
+  crude_gfx_shader_state_handle                            shader_state;
+  crude_gfx_descriptor_set_layout const                   *descriptor_set_layout[ CRUDE_GFX_DESCRIPTOR_SET_LAYOUTS_MAX_COUNT ];
+  crude_gfx_descriptor_set_layout_handle                   descriptor_set_layout_handle[ CRUDE_GFX_DESCRIPTOR_SET_LAYOUTS_MAX_COUNT ];
+  uint32                                                   num_active_layouts;
+  crude_gfx_depth_stencil_creation                         depth_stencil;
+  crude_gfx_blend_state_creation                           blend_state;
+  crude_gfx_rasterization_creation                         rasterization;
+  crude_gfx_pipeline_handle                                handle;
+  bool                                                     graphics_pipeline;
+  char                                                     name[ CRUDE_GFX_PIPELINE_NAME_MAX_LENGTH ];
+
+#if CRUDE_GFX_RAY_TRACING_ENABLED
+  crude_gfx_buffer_handle                                  shader_binding_table_raygen;
+  crude_gfx_buffer_handle                                  shader_binding_table_hit;
+  crude_gfx_buffer_handle                                  shader_binding_table_miss;
+#endif /* CRUDE_GFX_RAY_TRACING_ENABLED */
+} crude_gfx_pipeline;
+
+typedef struct crude_gfx_render_pass
+{
+  crude_gfx_render_pass_output                             output;
+  uint8                                                    num_render_targets;
+  char const                                              *name;
+} crude_gfx_render_pass;
+
+typedef struct crude_gfx_framebuffer
+{
+  uint32                                                   width;
+  uint32                                                   height;
+  float32                                                  scale_x;
+  float32                                                  scale_y;
+  crude_gfx_texture_handle                                 color_attachments[ CRUDE_GFX_IMAGE_OUTPUTS_MAX_COUNT ];
+  crude_gfx_texture_handle                                 depth_stencil_attachment;
+  uint32                                                   num_color_attachments;
+  uint8                                                    resize;
+  bool                                                     manual_resources_free;
+  char                                                     name[ CRUDE_GFX_FRAMEBUFFER_NAME_MAX_LENGTH ];
+} crude_gfx_framebuffer;
+
+typedef struct crude_gfx_shader_state
+{
+  crude_gfx_rhi_pipeline_shader_stage_create_info          shader_stage_info[ CRUDE_GFX_RHI_SHADER_STAGES_MAX_COUNT ];
+#if CRUDE_GFX_RAY_TRACING_ENABLED
+  crude_gfx_rhi_ray_tracing_shader_group_create_info       shader_group_info[ CRUDE_GFX_RHI_SHADER_STAGES_MAX_COUNT];
+#endif /* CRUDE_GFX_RAY_TRACING_ENABLED*/
+  const char                                              *name;
+  uint32                                                   active_shaders;
+  crude_gfx_pipeline_type                                  pipeline_type;
+  crude_gfx_shader_reflect                                 reflect;
+} crude_gfx_shader_state;
+
+typedef struct crude_gfx_resource_update
+{
+  crude_gfx_resource_deletion_type                         type;
+  crude_gfx_resource_index                                 handle;
+  uint32                                                   current_frame;
+} crude_gfx_resource_update;
+
+typedef struct crude_gfx_technique_creation
+{
+  crude_gfx_pipeline_handle                               *pipelines;
+  uint32                                                   pipelines_count;
+  char                                                     name[ CRUDE_GFX_TECHNIQUE_NAME_MAX_LENGTH ];
+} crude_gfx_technique_creation;
+
+typedef struct crude_gfx_technique
+{
+  crude_gfx_pipeline_handle                               *pipelines;
+  char                                                     name[ CRUDE_GFX_TECHNIQUE_NAME_MAX_LENGTH ];
+  crude_gfx_technique_handle                               handle;
+} crude_gfx_technique;
+
+typedef struct crude_gfx_cmd_pool
+{
+  crude_gfx_rhi_command_pool                               rhi_cmd_pool;
+#if CRUDE_GFX_GPU_PROFILER
+  struct
+  {
+    crude_gfx_rhi_query_pool                               rhi_timestamp_query_pool;
+    crude_gfx_rhi_query_pool                               rhi_pipeline_stats_query_pool;
+    crude_gfx_gpu_time_query_tree                         *time_queries_trees;
+    bool                                                   enabled;
+  } profiler;
+#endif /* CRUDE_GFX_GPU_PROFILER */
+} crude_gfx_cmd_pool;
+
+typedef struct crude_gfx_cmd_buffer_creation
+{
+  crude_gfx_cmd_pool_handle                                cmd_pool;
+  char                                                     name[ CRUDE_GFX_BUFFER_NAME_MAX ];
+} crude_gfx_cmd_buffer_creation;
+
+typedef struct crude_gfx_cmd_buffer
+{
+  crude_gfx_device                                        *gpu;
+
+  bool                                                     is_recording;
+  crude_gfx_render_pass                                   *current_render_pass;
+  crude_gfx_framebuffer                                   *current_framebuffer;
+  crude_gfx_pipeline                                      *current_pipeline;
+  crude_gfx_rhi_clear_value                                clears[ CRUDE_GFX_DEPTH_AND_STENCIL_CLEAR_COLOR_INDEX + 1 ];
+  crude_gfx_rhi_command_buffer                             rhi_cmd_buffer;
+
+  char                                                     name[ 512 ];
+
+  crude_gfx_cmd_pool_handle                                cmd_pool;
+} crude_gfx_cmd_buffer;
+
+typedef struct crude_gfx_compile_shader_description
+{
+  char const                                         *code;
+  char const                                         *define_name;
+  uint32                                              define_flags;
+  uint32                                              code_size;
+  crude_gfx_rhi_shader_stage_flag_bits                stage;
+  bool                                                optimized;
+  char const                                         *name;
+} crude_gfx_compile_shader_description;
+
+/************************************************
+ *
+ * GPU Resoruces Creation Empty Functions
+ * 
+ ***********************************************/
+CRUDE_API crude_gfx_sampler_creation
+crude_gfx_sampler_creation_empty
+(
+);
+
+CRUDE_API crude_gfx_buffer_creation
+crude_gfx_buffer_creation_empty
+(
+);
+
+CRUDE_API crude_gfx_framebuffer_creation
+crude_gfx_framebuffer_creation_empty
+(
+);
+
+CRUDE_API crude_gfx_pipeline_creation
+crude_gfx_pipeline_creation_empty
+(
+);
+
+CRUDE_API void
+crude_gfx_pipeline_creation_add_blend_state
+(
+  _In_ crude_gfx_pipeline_creation                        *creation,
+  _In_ crude_gfx_blend_state                               blend_state
+);
+
+CRUDE_API void
+crude_gfx_pipeline_creation_add_vertex_stream
+(
+  _In_ crude_gfx_pipeline_creation                        *creation,
+  _In_ uint32                                              binding,
+  _In_ uint32                                              stride,
+  _In_ crude_gfx_vertex_input_rate                         input_rate
+);
+
+CRUDE_API void
+crude_gfx_pipeline_creation_add_vertex_attribute
+(
+  _In_ crude_gfx_pipeline_creation                        *creation,
+  _In_ uint32                                              location,
+  _In_ uint32                                              binding,
+  _In_ uint32                                              offset,
+  _In_ crude_gfx_vertex_component_format                   format
+);
+
+CRUDE_API crude_gfx_descriptor_set_creation
+crude_gfx_descriptor_set_creation_empty
+(
+);
+
+CRUDE_API crude_gfx_render_pass_creation
+crude_gfx_render_pass_creation_empty
+(
+);
+
+CRUDE_API crude_gfx_texture_creation
+crude_gfx_texture_creation_empty
+(
+);
+
+CRUDE_API crude_gfx_texture_view_creation
+crude_gfx_texture_view_creation_empty
+(
+);
+
+CRUDE_API crude_gfx_render_pass_output
+crude_gfx_render_pass_output_empty
+(
+);
+
+CRUDE_API void
+crude_gfx_render_pass_output_add_color
+(
+  _In_ crude_gfx_render_pass_output                       *output,
+  _In_ crude_gfx_rhi_format                                color_format,
+  _In_ crude_gfx_rhi_image_layout                          color_final_layout,
+  _In_ crude_gfx_render_pass_operation                     color_operation
+);
+
+CRUDE_API void
+crude_gfx_render_pass_output_set_depth
+(
+  _In_ crude_gfx_render_pass_output                       *output,
+  _In_ crude_gfx_rhi_format                                depth_stencil_format,
+  _In_ crude_gfx_rhi_image_layout                          depth_stencil_final_layout,
+  _In_ crude_gfx_render_pass_operation                     depth_operation,
+  _In_ crude_gfx_render_pass_operation                     stencil_operation
+);
+
+CRUDE_API void
+crude_gfx_descriptor_set_creation_add_buffer
+(
+  _In_ crude_gfx_descriptor_set_creation                  *creation,
+  _In_ crude_gfx_buffer_handle                             buffer,
+  _In_ uint16                                              binding
+);
+
+CRUDE_API void
+crude_gfx_descriptor_set_creation_add_acceleration_structure
+(
+  _In_ crude_gfx_descriptor_set_creation                  *creation,
+  _In_ crude_gfx_rhi_acceleration_structure                rhi_acceleration_structure,
+  _In_ uint16                                              binding
+);
+
+CRUDE_API void
+crude_gfx_descriptor_set_creation_add_texture
+(
+  _In_ crude_gfx_descriptor_set_creation                  *creation,
+  _In_ crude_gfx_texture_handle                            texture,
+  _In_ uint16                                              binding
+);
+
+CRUDE_API void
+crude_gfx_descriptor_set_layout_creation_add_binding
+(
+  _In_ crude_gfx_descriptor_set_layout_creation           *creation,
+  _In_ crude_gfx_descriptor_set_layout_binding             binding
+);
+
+CRUDE_API void
+crude_gfx_shader_state_creation_add_stage
+(
+  _In_ crude_gfx_shader_state_creation                    *creation,
+  _In_ char const                                         *code,
+  _In_ uint64                                              code_size,
+  _In_ crude_gfx_rhi_shader_stage_flag_bits                type
+);
+
+/************************************************
+ *
+ * GPU Resoruces Functions
+ * 
+ ***********************************************/
+CRUDE_API crude_gfx_rhi_image_type
+crude_gfx_texture_type_to_image_type
+( 
+  _In_ crude_gfx_texture_type                              type
+);
+
+CRUDE_API crude_gfx_rhi_image_view_type
+crude_gfx_texture_type_to_image_view_type
+( 
+  _In_ crude_gfx_texture_type                              type
+);
+
+CRUDE_API crude_gfx_rhi_format
+crude_gfx_to_vertex_format
+( 
+  _In_ crude_gfx_vertex_component_format                   value
+);
+
+CRUDE_API crude_gfx_rhi_format
+crude_gfx_string_to_format
+(
+  _In_ char const                                         *format
+);
+
+CRUDE_API crude_gfx_vertex_component_format
+crude_gfx_to_vertex_component_format
+( 
+  _In_ char const                                         *format
+);
+
+CRUDE_API crude_gfx_rhi_primitive_topology
+crude_gfx_string_to_primitive_topology
+( 
+  _In_ char const                                         *format
+);
+
+crude_gfx_render_pass_operation
+crude_gfx_string_to_render_pass_operation
+(
+  _In_ char const                                         *op
+);

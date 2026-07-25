@@ -1,0 +1,62 @@
+
+#if defined( CRUDE_VALIDATOR_LINTING ) || defined( __cplusplus )
+#ifndef __cplusplus
+#extension GL_GOOGLE_include_directive : enable
+#endif
+//#define COMPOSE_LIGHT
+#define CRUDE_COMPUTE
+#include "common/platform.h"
+#endif /* CRUDE_VALIDATOR_LINTING || __cplusplus */
+
+#define COMPOSE_LIGHT_FLAG_SSR                             ( 1 << 0 )
+#define COMPOSE_LIGHT_FLAG_INDIRECT                        ( 1 << 1 )
+#define COMPOSE_LIGHT_FLAGS_COUNT                          2
+
+#define COMPOSE_LIGHT_SSR_ENABLED                          CRUDE_FLAGS & COMPOSE_LIGHT_FLAG_SSR
+#define COMPOSE_LIGHT_INDIRECT_ENABLED                     CRUDE_FLAGS & COMPOSE_LIGHT_FLAG_INDIRECT
+
+#if defined( COMPOSE_LIGHT )
+CRUDE_PUSH_CONSTANT( crude_gfx_compose_light_pass_push_constant_ )
+{
+  uint32                                                   direct_radiance_texture_index;
+  uint32                                                   indirect_radiance_texture_index;
+  uint32                                                   radiance_texture_index;
+  uint32                                                   albedo_texture_index;
+
+  uint32                                                   ssr_radiance_texture_index;
+  uint32                                                   roughness_metalness_texture_index;
+  XMFLOAT2                                                 padding;
+};
+
+#endif /* COMPOSE_LIGHT */
+
+#if !defined( __cplusplus )
+
+#if defined( COMPOSE_LIGHT )
+
+layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+
+void main()
+{
+  ivec2 coords = ivec2( gl_GlobalInvocationID.xy );
+
+  vec3 direct_radiance = CRUDE_TEXTURE_FETCH( direct_radiance_texture_index, coords, 0 ).xyz;
+  
+  vec3 radiance = direct_radiance;
+
+#if COMPOSE_LIGHT_INDIRECT_ENABLED
+  vec3 albedo = CRUDE_TEXTURE_FETCH( albedo_texture_index, coords, 0 ).xyz;
+  vec3 indirect_radiance = CRUDE_TEXTURE_FETCH( indirect_radiance_texture_index, coords, 0 ).xyz;
+  radiance += albedo * indirect_radiance;
+#endif
+
+#if COMPOSE_LIGHT_SSR_ENABLED
+  vec3 ssr_radiance = CRUDE_TEXTURE_FETCH( ssr_radiance_texture_index, coords, 0 ).xyz;
+  radiance += ssr_radiance;
+#endif
+  
+  CRUDE_IMAGE_STORE( radiance_texture_index, coords, vec4( radiance, 1.0f ) );
+}
+
+#endif /* COMPOSE_LIGHT */
+#endif /* !__cplusplus */

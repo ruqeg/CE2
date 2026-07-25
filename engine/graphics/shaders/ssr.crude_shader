@@ -1,0 +1,495 @@
+
+#if defined( CRUDE_VALIDATOR_LINTING ) || defined( __cplusplus )
+#ifndef __cplusplus
+#extension GL_GOOGLE_include_directive : enable
+#endif
+//#define SSR_COMPOSE
+//#define SSR_CONVOLVE_VERTICAL
+//#define SSR_CONVOLVE_HORIZONTAL
+//#define SSR_HIT_CALCULATION_LINEAR
+//#define SSR_HIT_CALCULATION_HIZ
+#define CRUDE_COMPUTE
+#include "common/platform.h"
+#include "common/debug.h"
+#include "common/scene.h"
+#endif /* CRUDE_VALIDATOR_LINTING || __cplusplus */
+
+#if defined( SSR_COMPOSE )
+CRUDE_PUSH_CONSTANT( crude_gfx_ssr_compose_pass_push_constant_ )
+{
+  SceneRef                                                 scene;
+  XMFLOAT2                                                 depth_texture_size;
+
+  uint32                                                   ssr_hit_uv_depth_rdotv_texture_index;
+  uint32                                                   output_texture_index;
+  uint32                                                   depth_texture_index;
+  uint32                                                   normal_texture_index;
+
+  uint32                                                   radiance_hierarchy_texture_index;
+  uint32                                                   packed_roughness_metalness_texture_index;
+  uint32                                                   radiance_hierarchy_mips_count;
+  float32                                                  fade_end;
+
+  float32                                                  fade_start;
+  float32                                                  max_distance;
+  XMFLOAT2                                                 _padding;
+};
+#endif /* SSR_COMPOSE */
+
+#if defined( SSR_CONVOLVE_VERTICAL ) || defined( SSR_CONVOLVE_HORIZONTAL )
+CRUDE_PUSH_CONSTANT( crude_gfx_convolve_pass_push_constant_ )
+{
+  uint32                                                   src_texture_index;
+  uint32                                                   dst_texture_index;
+  XMFLOAT2                                                 src_div_dst_texture_size; /* src_size / dst_size */
+};
+
+#endif /* SSR_CONVOLVE_VERTICAL || SSR_CONVOLVE_HORIZONTAL */
+
+#if defined( SSR_HIT_CALCULATION_LINEAR ) || defined( SSR_HIT_CALCULATION_HIZ )
+CRUDE_PUSH_CONSTANT( crude_gfx_ssr_hit_calculation_pass_push_constant_ )
+{
+  SceneRef                                                 scene;
+  float32                                                  ssr_max_steps;
+  float32                                                  ssr_max_distance;
+
+  float32                                                  ssr_stride;
+  float32                                                  ssr_z_thickness;
+  float32                                                  ssr_stride_zcutoff;
+  uint32                                                   depth_texture_index;
+
+  XMFLOAT2                                                 depth_texture_size;
+  uint32                                                   normal_texture_index;
+  uint32                                                   ssr_hit_uv_depth_rdotv_texture_index;
+};
+#endif /* SSR_HIT_CALCULATION_LINEAR || SSR_HIT_CALCULATION_HIZ */
+
+#if !defined( __cplusplus )
+
+#if defined( SSR_HIT_CALCULATION_LINEAR ) || defined( SSR_HIT_CALCULATION_HIZ )
+
+layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+
+float
+distance_squared
+(
+  in vec2                                                  a,
+  in vec2                                                  b
+)
+{
+  a -= b;
+  return dot( a, a );
+}
+
+bool
+intersects_depth_buffer
+(
+  in float                                                 z,
+  in float                                                 min_z,
+  in float                                                 max_z
+)
+{
+  /*
+   * Based on how far away from the camera the depth is,
+   * adding a bit of extra thickness can help improve some
+   * artifacts. Driving this value up too high can cause
+   * artifacts of its own.
+   */
+  float depth_scale = min( 1.0f, z * ssr_stride_zcutoff );
+  z += ssr_z_thickness + mix( 0.0f, 2.0f, depth_scale );
+  return ( max_z >= z ) && ( min_z - ssr_z_thickness <= z );
+}
+
+/**
+ * Source list:
+ * Screen Space Ray Tracing (McGuire Mara, 2014)
+ * GPU Pro 5 Hi-ZScreen-SpaceCone-Traced Reflections Yasin Uludag
+ * https://willpgfx.com/2015/07/screen-space-glossy-reflections/
+ * https://sugulee.wordpress.com/2021/01/16/performance-optimizations-for-screen-space-reflections-technique-part-1-linear-tracing-method/
+ */ 
+bool
+trace_screen_space_ray_hiz
+(
+  in vec3                                                  orig_vs,
+  in vec3                                                  dir_vs,
+  in float                                                 jitter,
+  out vec2                                                 hit_coords
+)
+{
+  return false;
+}
+
+bool
+trace_screen_space_ray_linear
+(
+  in vec3                                                  orig_vs,
+  in vec3                                                  dir_vs,
+  in float                                                 jitter,
+  out vec2                                                 hit_coords
+)
+{
+  vec4                                                     h0, h1, pqk, dpqk;
+  vec3                                                     dq, q, q0, q1, end_vs;
+  vec2                                                     dp, p0, p1, delta;
+  float                                                    dk, k0, k1;
+  float                                                    stride, stride_scale;
+  float                                                    ray_length, step_dir, invdx;
+  float                                                    end, step_count, prev_zmax_estimate, ray_zmin, ray_zmax, scene_zmax;
+  bool                                                     permute;
+
+#if CRUDE_RIGHT_HAND
+  ray_length = ( ( -orig_vs.z - dir_vs.z * ssr_max_distance ) < scene.data.camera.znear ) ? ( scene.data.camera.znear + orig_vs.z  ) / -dir_vs.z : ssr_max_distance;
+#else
+  ray_length = ( ( orig_vs.z + dir_vs.z * ssr_max_distance ) < scene.data.camera.znear ) ? ( scene.data.camera.znear - orig_vs.z ) / dir_vs.z : ssr_max_distance;
+#endif
+
+  end_vs = orig_vs + dir_vs * ray_length;
+
+  h0 = vec4( orig_vs, 1.0f ) * scene.data.camera.view_to_clip; h0.xy *= depth_texture_size;
+  h1 = vec4( end_vs, 1.0f ) * scene.data.camera.view_to_clip; h1.xy *= depth_texture_size;
+
+  k0 = 1.0f / h0.w;
+  k1 = 1.0f / h1.w;
+  
+#if CRUDE_RIGHT_HAND
+  q0 = vec3( orig_vs.xy, -orig_vs.z ) * k0;
+  q1 = vec3( end_vs.xy, -end_vs.z ) * k1;
+#else
+  q0 = orig_vs * k0;
+  q1 = end_vs * k1;
+#endif
+
+  p0 = h0.xy * k0;
+  p1 = h1.xy * k1;
+
+  /* If the line is degenerate, make it cover at least one pixel to avoid handling zero-pixel extent as a special case later */
+  p1 += ( distance_squared( p0, p1 ) < 0.0001f ) ? vec2( 0.01f, 0.01f ) : vec2( 0.0f );
+  delta = p1 - p0;
+
+  /* Permute so that the primary iteration is in x to collapse all quadrant-specific DDA cases later */
+  permute = false;
+  if ( abs( delta.x ) < abs( delta.y ) )
+  {
+    /* This is a more-vertical line */
+    permute = true;
+    delta = delta.yx;
+    p0 = p0.yx;
+    p1 = p1.yx;
+  }
+
+  step_dir = sign( delta.x );
+  invdx = step_dir / delta.x;
+
+  /* Track the derivatives of Q and k */
+  dq = ( q1 - q0 ) * invdx;
+  dk = ( k1 - k0 ) * invdx;
+  dp = vec2( step_dir, delta.y * invdx );
+
+  /* Scale derivatives by the desired pixel stride and then offset the starting values by the jitter fraction */
+#if CRUDE_RIGHT_HAND
+  stride_scale = 1.0f - min( 1.0f, -orig_vs.z * ssr_stride_zcutoff );
+#else
+  stride_scale = 1.0f - min( 1.0f, orig_vs.z * ssr_stride_zcutoff );
+#endif
+
+  stride = 1.0f + stride_scale * ssr_stride;
+  
+  dp *= stride;
+  dq *= stride;
+  dk *= stride;
+
+  p0 += dp * jitter;
+  q0 += dq * jitter;
+  k0 += dk * jitter;
+
+  /* Slide P from P0 to P1, (now-homogeneous) Q from Q0 to Q1, k from k0 to k1 */
+  pqk = vec4( p0, q0.z, k0 );
+  dpqk = vec4( dp, dq.z, dk );
+  q = q0; 
+
+  /* Adjust end condition for iteration direction */
+  end = p1.x * step_dir;
+
+  step_count = 0.0f;
+#if CRUDE_RIGHT_HAND
+  prev_zmax_estimate = -orig_vs.z;
+#else
+  prev_zmax_estimate = orig_vs.z;
+#endif
+
+  ray_zmin = prev_zmax_estimate;
+  ray_zmax = prev_zmax_estimate;
+  
+  scene_zmax = ray_zmax + 100.0f;
+    
+  while
+  (
+    ( ( pqk.x * step_dir ) <= end ) && 
+    ( step_count < ssr_max_steps) &&
+    ( !intersects_depth_buffer( scene_zmax, ray_zmin, ray_zmax ) ) && 
+    ( scene_zmax != 0.0f ) 
+  )
+  {
+    ray_zmin = prev_zmax_estimate;
+    ray_zmax = ( dq.z * 0.5 + pqk.z ) / ( dpqk.w * 0.5 + pqk.w );
+
+    prev_zmax_estimate = ray_zmax;
+    if ( ray_zmin > ray_zmax )
+    {
+      crude_swap( ray_zmin, ray_zmax);
+    }
+
+    hit_coords = permute ? pqk.yx : pqk.xy;
+    hit_coords = hit_coords * 0.5 + depth_texture_size * 0.5;
+    hit_coords.y = depth_texture_size.y - hit_coords.y;
+
+    scene_zmax = CRUDE_TEXTURE_FETCH( depth_texture_index, ivec2( hit_coords ), 0 ).x;
+    scene_zmax = crude_linearize_depth( scene_zmax, scene.data.camera.znear, scene.data.camera.zfar );
+
+    pqk += dpqk;
+    ++step_count;
+  }
+
+  return intersects_depth_buffer( scene_zmax, ray_zmin, ray_zmax );
+}
+
+void main()
+{
+  ivec2 coords = ivec2( gl_GlobalInvocationID.xy );
+  float depth = CRUDE_TEXTURE_FETCH( depth_texture_index, coords, 0 ).r;
+  vec2 packed_normal = CRUDE_TEXTURE_FETCH( normal_texture_index, coords, 0 ).xy;
+  vec2 pixel_uv = crude_uv_nearest( coords, scene.data.resolution );
+
+  vec3 pixel_vs = crude_position_from_depth( pixel_uv, depth, scene.data.camera.clip_to_view );
+  vec3 normal_vs = crude_octahedral_decode( packed_normal ) * mat3( scene.data.camera.world_to_view );
+
+  vec3 to_ray_origin_vs = normalize( pixel_vs );
+  vec3 ray_origin_vs = pixel_vs;
+  vec3 ray_direction_vs = reflect( to_ray_origin_vs, normal_vs );
+
+  float rdotv = dot( ray_direction_vs, to_ray_origin_vs );
+
+  vec2 hit_coords = vec2( 0.0f );
+
+  float jitter = ssr_stride > 1.0f ? float( int( coords.x + coords.y ) & 1 ) * 0.5f : 0.0f;
+
+#if defined( SSR_HIT_CALCULATION_LINEAR )
+  bool intersection = trace_screen_space_ray_linear( ray_origin_vs, ray_direction_vs, jitter, hit_coords );
+#elif defined( SSR_HIT_CALCULATION_HIZ )
+  bool intersection = trace_screen_space_ray_hiz( ray_origin_vs, ray_direction_vs, jitter, hit_coords );
+#else
+  ERROR
+#endif
+
+  vec2 hit_uv = hit_coords / depth_texture_size;
+  if( hit_uv.x > 1 || hit_uv.x < 0.0 || hit_uv.y > 1 || hit_uv.y < 0.0 )
+  {
+    intersection = false;
+  }
+
+  depth = CRUDE_TEXTURE_FETCH( depth_texture_index, ivec2( hit_coords ), 0 ).r;
+  
+  //CRUDE_IMAGE_STORE( ssr_hit_uv_depth_rdotv_texture_index, coords, vec4( depth * depth, depth * depth, depth * depth, 1 ) );
+  CRUDE_IMAGE_STORE( ssr_hit_uv_depth_rdotv_texture_index, coords, vec4( hit_uv, depth, max( rdotv, 0 ) ) * ( intersection ? 1.0f : 0.0f ) );
+}
+
+#endif /* SSR_HIT_CALCULATION_LINEAR  || SSR_HIT_CALCULATION_HIZ */
+
+#if defined( SSR_CONVOLVE_VERTICAL ) || defined( SSR_CONVOLVE_HORIZONTAL )
+
+layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+
+#if defined( SSR_CONVOLVE_HORIZONTAL )
+const ivec2 offsets[7] = {{-3, 0}, {-2, 0}, {-1, 0}, {0, 0}, {1, 0}, {2, 0}, {3, 0}};
+#elif defined( SSR_CONVOLVE_VERTICAL ) 
+const ivec2 offsets[ 7 ] =  {{0, -3}, {0, -2}, {0, -1}, {0, 0}, {0, 1}, {0, 2}, {0, 3}};
+#endif
+const float weights[7] = {0.001f, 0.028f, 0.233f, 0.474f, 0.233f, 0.028f, 0.001f};
+
+void main()
+{
+  ivec2 dst_coords = ivec2( gl_GlobalInvocationID.xy );
+  ivec2 src_coords = ivec2( dst_coords * src_div_dst_texture_size );
+
+  vec4 color = vec4( 0.0f, 0.0f, 0.0f, 1.0f );
+
+  #pragma unroll
+  for( uint i = 0u; i < 7u; ++i)
+  {
+    color += CRUDE_TEXTURE_FETCH( src_texture_index, ivec2( src_coords + offsets[ i ] ), 0 ) * weights[ i ];
+  }
+
+  CRUDE_IMAGE_STORE( dst_texture_index, dst_coords, vec4( color.xyz, 1.0f ) );
+}
+
+#endif
+
+#if defined( SSR_COMPOSE )
+
+#define CNST_MAX_SPECULAR_EXP 1024 // TODO ?
+
+layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+
+float
+roughness_to_specular_power
+(
+  in float                                                 r
+)
+{
+  return 2 / ( pow( r, 4 ) ) - 2;
+}
+
+float
+specular_power_to_cone_angle
+(
+  in float                                                 specular_power
+)
+{
+  if ( specular_power >= exp2( CNST_MAX_SPECULAR_EXP ) )
+  {
+    return 0.0f;
+  }
+  
+  const float xi = 0.244f;
+  float exponent = 1.0f / ( specular_power + 1.0f );
+  return acos( pow( xi, exponent ));
+}
+
+float
+isosceles_triangle_opposite
+(
+  in float                                                 adjacent_length,
+  in float                                                 cone_theta
+)
+{
+  return 2.0f * tan( cone_theta ) * adjacent_length;
+}
+
+float
+isosceles_triangle_in_radius
+(
+  in float                                                 a,
+  in float                                                 h
+)
+{
+  float a2 = a * a;
+  float fh2 = 4.0f * h * h;
+  return ( a * ( sqrt( a2 + fh2 ) - a ) ) / ( 4.0f * h );
+}
+
+float
+isosceles_triangle_next_adjacent
+(
+  in float                                                 adjacent_length,
+  in float                                                 incircle_radius
+)
+{
+  return adjacent_length - ( incircle_radius * 2.0f );
+}
+
+vec4
+cone_sample_weighted_color
+(
+  in uint                                                  radiance_texture_index,
+  in vec2                                                  sample_pos,
+  in float                                                 mip_channel,
+  in float                                                 gloss
+)
+{
+  /* samp trilinear clamp */
+  vec3 sample_radiance = CRUDE_TEXTURE_LOD( radiance_texture_index, sample_pos, mip_channel ).rgb;
+  return vec4( sample_radiance * gloss, gloss );
+}
+
+void main()
+{
+  ivec2 coords = ivec2( gl_GlobalInvocationID.xy );
+  
+  vec4 ssr_data_packed = CRUDE_TEXTURE_FETCH( ssr_hit_uv_depth_rdotv_texture_index, coords, 0 ).xyzw;
+  float depth = CRUDE_TEXTURE_FETCH( depth_texture_index, coords, 0 ).r;
+  vec2 packed_normal = CRUDE_TEXTURE_FETCH( normal_texture_index, coords, 0 ).xy;
+
+  vec2 ssr_hit_uv = ssr_data_packed.xy;
+  float ssr_hit_depth = ssr_data_packed.z;
+  float ssr_hit_rdotv = ssr_data_packed.w;
+  vec3 fallback_color = vec3( 0, 0, 0 );// indirectSpecularBuffer.Load(loadIndices).rgb;
+
+  /* either means no hit or the ray faces back towards the camera */
+  if ( ssr_hit_rdotv <= 0.0f )
+  {
+    CRUDE_IMAGE_STORE( output_texture_index, coords, vec4( fallback_color, 1.0f ) );
+    return;
+  }
+
+  vec2 screen_uv = crude_uv_nearest( coords, scene.data.resolution );
+  vec3 position_ss = vec3( screen_uv, depth );
+  vec3 pixel_vs = crude_position_from_depth( screen_uv, depth, scene.data.camera.clip_to_view );
+  vec3 to_position_vs = normalize( pixel_vs );
+  vec3 normal_vs = crude_octahedral_decode( packed_normal ) * mat3( scene.data.camera.world_to_view );
+  float roughness = CRUDE_TEXTURE_FETCH( packed_roughness_metalness_texture_index, coords, 0 ).x;
+
+  float gloss = 1.0f - roughness;
+  float specular_power = roughness_to_specular_power( roughness );
+
+  float cone_theta = specular_power_to_cone_angle( specular_power ) * 0.5f;
+
+  vec2 delta_uv = ssr_hit_uv - screen_uv;
+  float adjacent_length = length( delta_uv );
+  vec2 adjacent_unit = normalize( delta_uv );
+
+  vec4 total_color = vec4( 0.0f, 0.0f, 0.0f, 0.0f );
+  float remaining_alpha = 1.0f;
+  float max_mip_level = float( radiance_hierarchy_mips_count ) - 1.0f;
+
+  float gloss_mult = gloss;
+  
+  for ( int i = 0; i < 14; ++i )
+  {
+    float opposite_length = isosceles_triangle_opposite( adjacent_length, cone_theta );
+    float incircle_size = isosceles_triangle_in_radius( opposite_length, adjacent_length );
+
+    vec2 sample_pos = screen_uv + adjacent_unit * ( adjacent_length - incircle_size );
+    float mip_channel = clamp( log2( incircle_size * max( depth_texture_size.x, depth_texture_size.y ) ), 0.0f, max_mip_level );
+
+    vec4 new_color = cone_sample_weighted_color( radiance_hierarchy_texture_index, sample_pos, mip_channel, gloss_mult );
+
+    remaining_alpha -= new_color.a;
+    if ( remaining_alpha < 0.0f )
+    {
+      new_color.rgb *= ( 1.0f - abs( remaining_alpha ) );
+    }
+    total_color += new_color;
+
+    if ( total_color.a >= 1.0f )
+    {
+      break;
+    }
+
+    adjacent_length = isosceles_triangle_next_adjacent( adjacent_length, incircle_size );
+    gloss_mult *= gloss;
+  }
+
+  vec3 to_eye = -to_position_vs;
+  vec3 specular = crude_schlick_fresnel( vec3( 0.6f ) /*CRUDE_DEAFULT_F0*/, abs( dot( normal_vs, to_eye ) ) ) * CRUDE_1DIVPI;
+
+  // fade rays close to screen edge
+  vec2 boundary = abs( ssr_hit_uv.xy - vec2( 0.5f, 0.5f ) ) * 2.0f;
+  const float fade_diff_rcp = 1.0f / ( fade_end - fade_start );
+  float fade_on_border = 1.0f - crude_saturate_scalar( ( boundary.x - fade_start ) * fade_diff_rcp );
+  fade_on_border *= 1.0f - crude_saturate_scalar( ( boundary.y - fade_start ) * fade_diff_rcp );
+  fade_on_border = smoothstep( 0.0f, 1.0f, fade_on_border );
+  
+  vec3 ray_hit_position_vs = crude_position_from_depth( ssr_hit_uv, ssr_hit_depth, scene.data.camera.clip_to_view );
+  float fade_on_distance = 1.0f - crude_saturate_scalar( distance( ray_hit_position_vs, pixel_vs ) / max_distance );
+  float fade_on_perpendicular = crude_saturate_scalar( mix( 0.0f, 1.0f, crude_saturate_scalar( ssr_hit_rdotv * 4.0f ) ) );
+  float fade_on_roughness = crude_saturate_scalar( mix( 0.0f, 1.0f, gloss * 4.0f ) );
+  float total_fade = fade_on_border * fade_on_distance * fade_on_perpendicular * fade_on_roughness * ( 1.0f - crude_saturate_scalar( remaining_alpha ) );
+  
+  //CRUDE_IMAGE_STORE( output_texture_index, coords, vec4( ssr_hit_uv.yyy, 1 ) );
+  //CRUDE_IMAGE_STORE( output_texture_index, coords, vec4( fade_on_border.xxx, 1 ) );
+  CRUDE_IMAGE_STORE( output_texture_index, coords, vec4( mix( fallback_color, total_color.rgb * specular, total_fade ), 1.0f ) );
+}
+
+#endif /* SSR_COMPOSE */
+
+#endif /* !__cplusplus */

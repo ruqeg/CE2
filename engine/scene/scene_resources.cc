@@ -1,0 +1,284 @@
+#include <engine/scene/scene_ecs.h>
+#include <engine/physics/physics.h>
+
+#include <engine/scene/scene_resources.h>
+
+XMMATRIX
+crude_camera_view_to_clip
+(
+  _In_ crude_camera const                                 *camera
+)
+{
+  return XMMatrixPerspectiveFovRH( camera->fov_radians, camera->aspect_ratio, camera->near_z, camera->far_z );
+}
+
+crude_transform
+crude_transform_empty
+(
+)
+{
+  crude_transform transform = CRUDE_COMPOUNT_EMPTY( crude_transform );
+  XMStoreFloat3( &transform.translation, XMVectorZero( ) );
+  XMStoreFloat4( &transform.rotation, XMQuaternionIdentity( ) );
+  XMStoreFloat3( &transform.scale, XMVectorSplatOne( ) );
+  return transform;
+}
+
+crude_gltf
+crude_gltf_empty
+(
+)
+{
+  crude_gltf gltf = CRUDE_COMPOUNT_EMPTY( crude_gltf );
+  gltf.hidden = false;
+  crude_gfx_model_renderer_resources_instance_initialize( &gltf.model_renderer_resources_instance, NULL, CRUDE_COMPOUNT( crude_gfx_model_renderer_resources_handle, { -1 } ) );
+  return gltf;
+}
+
+crude_ray
+crude_ray_empty
+(
+)
+{
+  crude_ray ray = CRUDE_COMPOUNT_EMPTY( crude_ray );
+  return ray;
+}
+
+crude_camera
+crude_camera_empty
+(
+)
+{
+  crude_camera camera = CRUDE_COMPOUNT_EMPTY( crude_camera );
+  camera.fov_radians = 1;
+  camera.aspect_ratio = 1.8;
+  camera.near_z = 1;
+  camera.far_z = 300;
+  return camera;
+}
+
+crude_node_external
+crude_node_external_empty
+(
+)
+{
+  crude_node_external node_external = CRUDE_COMPOUNT_EMPTY( crude_node_external );
+  return node_external;
+}
+
+crude_terrain
+crude_terrain_empty
+(
+)
+{
+  crude_terrain terrain = CRUDE_COMPOUNT_EMPTY( crude_terrain );
+  terrain.height_texture_handle = CRUDE_GFX_TEXTURE_HANDLE_INVALID;
+  return terrain;
+}
+
+crude_animation_player
+crude_animation_player_empty
+(
+)
+{
+  crude_animation_player animation_player = CRUDE_COMPOUNT_EMPTY( crude_animation_player );
+  return animation_player;
+}
+
+XMMATRIX
+crude_transform_node_to_world
+(
+  _In_ crude_ecs                                          *world,
+  _In_ crude_entity                                        node,
+  _In_opt_ crude_transform const                          *transform
+)
+{
+  crude_transform const                                   *parent_transform;
+  XMMATRIX                                                 node_to_world;
+  crude_entity                                             parent;
+
+  if ( transform == NULL )
+  {
+    transform = CRUDE_ENTITY_GET_IMMUTABLE_COMPONENT( world, node, crude_transform );
+  }
+
+  node_to_world = crude_transform_node_to_parent( transform );
+  parent = crude_entity_get_parent( world, node );
+
+  while ( crude_entity_valid( world, parent ) )
+  {
+    parent_transform = CRUDE_ENTITY_GET_IMMUTABLE_COMPONENT( world, parent, crude_transform );
+
+    if ( parent_transform )
+    {
+      node_to_world = XMMatrixMultiply( node_to_world, crude_transform_node_to_parent( parent_transform ) );
+    }
+    
+    node = parent;
+    parent = crude_entity_get_parent( world, parent );
+  }
+  
+  return node_to_world;
+}
+
+void
+crude_transform_decompose
+(
+  _Out_ crude_transform                                   *transform,
+  _In_ XMMATRIX                                            node_to_parent
+)
+{
+  XMVECTOR                                                 t, s, r;
+  
+  XMMatrixDecompose( &s, &r, &t, node_to_parent );
+  XMStoreFloat3( &transform->translation, t );
+  XMStoreFloat3( &transform->scale, s );
+  XMStoreFloat4( &transform->rotation, r );
+}
+
+XMMATRIX
+crude_transform_node_to_parent
+(
+  _In_ crude_transform const                              *transform
+)
+{ 
+  return XMMatrixAffineTransformation( XMLoadFloat3( &transform->scale ), XMVectorZero( ), XMLoadFloat4( &transform->rotation ), XMLoadFloat3( &transform->translation ) );
+}
+
+XMMATRIX
+crude_transform_parent_to_world
+(
+  _In_ crude_ecs                                          *world,
+  _In_ crude_entity                                        node
+)
+{
+  crude_entity parent = crude_entity_get_parent( world, node );
+  
+  if ( crude_entity_valid( world, parent ) && CRUDE_ENTITY_HAS_COMPONENT( world, parent, crude_transform ) )
+  {
+    crude_transform *parent_transform = CRUDE_ENTITY_GET_MUTABLE_COMPONENT( world, parent, crude_transform );
+    return crude_transform_node_to_world( world, parent, parent_transform );
+  }
+
+  return XMMatrixIdentity( ) ;
+}
+
+crude_transform
+crude_transform_lerp
+(
+  _In_ crude_transform                                    *transform1,
+  _In_ crude_transform                                    *transform2,
+  _In_ float32                                             t
+)
+{
+  crude_transform result;
+  XMStoreFloat3( &result.translation, XMVectorLerp( XMLoadFloat3( &transform1->translation ), XMLoadFloat3( &transform2->translation ), t ) );
+  XMStoreFloat4( &result.rotation, XMQuaternionSlerp( XMLoadFloat4( &transform1->rotation ), XMLoadFloat4( &transform2->rotation ), t ) );
+  XMStoreFloat3( &result.scale, XMVectorLerp( XMLoadFloat3( &transform1->scale ), XMLoadFloat3( &transform2->scale ), t ) );
+  return result;
+}
+
+bool
+crude_ray_cast
+(
+  _In_ crude_physics                                      *physics,
+  _In_ ecs_world_t                                        *world,
+  _In_ crude_entity                                        ray_entity,
+  _Out_ crude_physics_ray_cast_result                     *ray_cast_result
+)
+{
+  crude_ray const                                         *ray;
+  XMMATRIX                                                 ray_to_world;
+  XMVECTOR                                                 ray_direction, ray_origin;
+  
+  ray_to_world = crude_transform_node_to_world( world, ray_entity, NULL );
+  ray = CRUDE_ENTITY_GET_IMMUTABLE_COMPONENT( world, ray_entity, crude_ray );
+
+  ray_direction = XMVectorScale( XMVector3TransformNormal( XMVectorSet( 0, 0, 1, 0 ), ray_to_world ), ray->distance );
+  ray_origin = ray_to_world.r[ 3 ];
+
+  CRUDE_ASSERT( false && "TODO!" );
+  return false;
+  //return crude_physics_ray_cast( physics, world, ray_origin, ray_direction, ray->broad_phase_mask, ray->layer_mask, ray_cast_result );
+}
+
+char const*
+crude_world_environment_ssr_type_to_str
+(
+  _In_ crude_world_environment_ssr_type                    type
+)
+{
+  switch ( type )
+  {
+    case CRUDE_WORLD_ENVIRONMENT_SSR_TYPE_NONE: return "None";
+    case CRUDE_WORLD_ENVIRONMENT_SSR_TYPE_HIZ: return "HIZ";
+    case CRUDE_WORLD_ENVIRONMENT_SSR_TYPE_LINEAR: return "Linear";
+  }
+  CRUDE_ASSERT( false );
+  return "Unknown";
+}
+
+crude_light
+crude_light_empty
+(
+)
+{
+  crude_light                                              light;
+
+  light = CRUDE_COMPOUNT_EMPTY( crude_light );
+  light.color.x = 1;
+  light.color.y = 1;
+  light.color.z = 1;
+  light.intensity = 1;
+  light.radius = 1;
+  return light;
+}
+
+crude_ddgi_area
+crude_ddgi_area_empty
+(
+)
+{
+  crude_ddgi_area                                          ddgi_area;
+
+  ddgi_area = CRUDE_COMPOUNT_EMPTY( crude_ddgi_area );
+  ddgi_area.probe_spacing = XMFLOAT3{ 2.0, 2.0, 2.0 };
+  ddgi_area.self_shadow_bias = 0.3f;
+  ddgi_area.infinite_bounces_multiplier = 0.75f;
+  ddgi_area.hysteresis = 0.95f;
+  ddgi_area.max_probe_offset = 0.4f;
+  ddgi_area.shadow_weight_power = 2.5;
+  ddgi_area.probe_update_per_frame = 1000;
+  ddgi_area.probe_count.x = 20;
+  ddgi_area.probe_count.y = 20;
+  ddgi_area.probe_count.z = 20;
+  ddgi_area.offsets_calculations_count = 24;
+  ddgi_area.probe_rays = 128;
+  ddgi_area.use_half_resolution = false;
+  return ddgi_area;
+}
+
+crude_world_environment
+crude_world_environment_empty
+(
+)
+{
+  crude_world_environment                                  world_environment;
+  world_environment = CRUDE_COMPOUNT_EMPTY( crude_world_environment );
+  
+  world_environment.ambient_color.x = 1.f;
+  world_environment.ambient_color.y = 1.f;
+  world_environment.ambient_color.z = 1.f;
+  world_environment.ambient_intencity = 1.f;
+  
+  world_environment.ssr.type = CRUDE_WORLD_ENVIRONMENT_SSR_TYPE_HIZ;
+  world_environment.ssr.max_steps = 100;
+  world_environment.ssr.max_distance = 100;
+  world_environment.ssr.fade_start = 0.5;
+  world_environment.ssr.fade_end = 1.0;
+  world_environment.ssr.stride_zcutoff = 0.011;
+  world_environment.ssr.stride = 20;
+  world_environment.ssr.z_thickness = 0.6;
+
+  return world_environment;
+}

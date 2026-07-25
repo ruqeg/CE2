@@ -1,0 +1,144 @@
+
+#if defined( CRUDE_VALIDATOR_LINTING ) || defined( __cplusplus )
+#ifndef __cplusplus
+#extension GL_GOOGLE_include_directive : enable
+#endif
+//#define CULLING_EARLY
+//#define CULLING_LATE
+#define CRUDE_COMPUTE
+#include "common/platform.h"
+#include "common/debug.h"
+#include "common/scene.h"
+#include "common/culling.h"
+#endif /* CRUDE_VALIDATOR_LINTING || __cplusplus */
+
+#if defined( CULLING_EARLY ) || defined( CULLING_LATE )
+CRUDE_PUSH_CONSTANT( crude_gfx_culling_pass_push_constant_ )
+{
+  SceneRef                                                 scene;
+  MeshDrawsRef                                             mesh_draws;
+
+  MeshInstancesDrawsRef                                    mesh_instance_draws;
+  MeshDrawCommandsRef                                      mesh_draw_commands;
+
+  MeshDrawCommandsRef                                      mesh_draw_commands_culled;
+  MeshDrawCountRef                                         mesh_draw_count;
+
+  DebugLinesVerticesRef                                    debug_line_vertices;
+  DebugCountsRef                                           debug_counts;
+};
+#endif /* defined( CULLING_EARLY ) || defined( CULLING_LATE ) */
+
+#if !defined( __cplusplus )
+
+#if defined( CULLING_EARLY ) || defined( CULLING_LATE )
+layout(local_size_x=64, local_size_y=1, local_size_z=1) in;
+
+void write_mesh_draw_command
+(
+  out crude_gfx_mesh_draw_command                          mesh_draw_command,
+  in uint                                                  mesh_instance_draw_index,
+  in uint                                                  mesh_draw_index
+)
+{
+  mesh_draw_command.draw_id = mesh_instance_draw_index;
+  mesh_draw_command.indirect_meshlet_group_count_x = ( mesh_draws.data[ mesh_draw_index ].meshletes_count + 31 ) / 32;
+  mesh_draw_command.indirect_meshlet_group_count_y = 1;
+  mesh_draw_command.indirect_meshlet_group_count_z = 1;
+  mesh_draw_command.indirect_mesh_vertex_count = mesh_draws.data[ mesh_draw_index ].mesh_indices_count;
+  mesh_draw_command.indirect_mesh_instance_count = 1;
+  mesh_draw_command.indirect_mesh_first_vertex = 0;
+  mesh_draw_command.indirect_mesh_first_instance = 0;
+}
+
+void main()
+{
+  uint mesh_instance_draw_index = gl_GlobalInvocationID.x;
+
+#if defined( CULLING_LATE )
+  if ( mesh_instance_draw_index < mesh_draw_count.data.opaque_mesh_culled_count )
+  {
+    mesh_instance_draw_index = mesh_draw_commands_culled.data[ mesh_instance_draw_index ].draw_id;
+  }
+  else if ( int(mesh_instance_draw_index) - mesh_draw_count.data.opaque_mesh_culled_count < mesh_draw_count.data.transparent_mesh_culled_count )
+  {
+    mesh_instance_draw_index = mesh_draw_commands_culled.data[ int(mesh_instance_draw_index) - mesh_draw_count.data.opaque_mesh_culled_count + mesh_draw_count.data.total_mesh_count ].draw_id;
+  }
+  else
+  {
+    return;
+  }
+#else
+  if ( mesh_instance_draw_index >= mesh_draw_count.data.total_mesh_count )
+  {
+    return;
+  }
+#endif
+  
+  uint mesh_draw_index = mesh_instance_draws.data[ mesh_instance_draw_index ].mesh_draw_index;
+  mat4 mesh_to_world = mesh_instance_draws.data[ mesh_instance_draw_index ].mesh_to_world;
+  vec4 bounding_sphere = mesh_instance_draws.data[ mesh_instance_draw_index ].bounding_sphere;
+  vec4 world_center = vec4( bounding_sphere.xyz, 1 ) * mesh_to_world;
+  float scale = crude_calculate_scale_from_matrix( mat3( mesh_to_world ) );
+  float radius = bounding_sphere.w * scale * 1.1;
+
+  vec4 view_center = world_center * scene.data.camera.world_to_view;
+  
+  //crude_debug_draw_box( debug_line_vertices, debug_counts, world_center.xyz - radius, world_center.xyz + radius, vec4( 1, 1, 1, 1 ) );
+
+  bool frustum_visible = crude_frustum_culling( scene.data.camera, view_center.xyz, radius );
+
+  bool occlusion_visible = frustum_visible;
+  if ( frustum_visible )
+  {
+    occlusion_visible = crude_occlusion_culling(
+      mesh_draw_index,
+      view_center.xyz, radius, scene.data.camera.znear, 
+      scene.data.camera.view_to_clip[ 0 ][ 0 ],
+      scene.data.camera.view_to_clip[ 1 ][ 1 ],
+      mesh_draw_count.data.depth_pyramid_texture_index, world_center.xyz,
+      scene.data.camera.position,
+      scene.data.camera.world_to_clip,
+      debug_line_vertices,
+      debug_counts
+    );
+  }
+
+  bool is_mesh_opaque = ( ( mesh_draws.data[ mesh_draw_index ].flags & ( CRUDE_MESH_DRAW_FLAGS_ALPHA_MASK | CRUDE_MESH_DRAW_FLAGS_TRANSLUCENT_MASK ) ) == 0 );
+#if defined( CULLING_LATE )
+  if ( occlusion_visible )
+  {
+    if ( is_mesh_opaque )
+    {
+      uint draw_index = atomicAdd( mesh_draw_count.data.opaque_mesh_visible_late_count, 1 );
+      write_mesh_draw_command( mesh_draw_commands.data[ draw_index ], mesh_instance_draw_index, mesh_draw_index );
+    }
+    else
+    {
+      uint draw_index = atomicAdd( mesh_draw_count.data.transparent_mesh_visible_count, 1 ) + mesh_draw_count.data.total_mesh_count;
+      write_mesh_draw_command( mesh_draw_commands.data[ draw_index ], mesh_instance_draw_index, mesh_draw_index );
+    }
+  }
+#else
+  if ( occlusion_visible && is_mesh_opaque ) /* Add only opaque objects for early draw */
+  {
+    uint draw_index = atomicAdd( mesh_draw_count.data.opaque_mesh_visible_early_count, 1 );
+    write_mesh_draw_command( mesh_draw_commands.data[ draw_index ], mesh_instance_draw_index, mesh_draw_index );
+  }
+  else if ( is_mesh_opaque )
+  {
+    /* Add culled opaque object for re-test */
+    uint draw_index = atomicAdd( mesh_draw_count.data.opaque_mesh_culled_count, 1 );
+    write_mesh_draw_command( mesh_draw_commands_culled.data[ draw_index ], mesh_instance_draw_index, mesh_draw_index );
+  }
+  else
+  {
+    /* Add culled transparent object for re-test */
+    uint draw_index = atomicAdd( mesh_draw_count.data.transparent_mesh_culled_count, 1 ) + mesh_draw_count.data.total_mesh_count;
+    write_mesh_draw_command( mesh_draw_commands_culled.data[ draw_index ], mesh_instance_draw_index, mesh_draw_index );
+  }
+#endif
+}
+#endif /* CULLING_EARLY || CULLING_LATE */
+
+#endif /* !__cplusplus */

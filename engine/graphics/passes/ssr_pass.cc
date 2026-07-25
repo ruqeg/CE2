@@ -1,0 +1,307 @@
+#include <engine/core/profiler.h>
+#include <engine/scene/scene_ecs.h>
+#include <engine/graphics/scene_renderer.h>
+
+#define SSR_COMPOSE
+#define SSR_CONVOLVE_VERTICAL
+#define SSR_HIT_CALCULATION_LINEAR
+#include <engine/graphics/shaders/ssr.crude_shader>
+
+#include <engine/graphics/passes/ssr_pass.h>
+
+void
+crude_gfx_ssr_pass_initialize
+(
+  _In_ crude_gfx_ssr_pass                                 *pass,
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+)
+{
+  crude_gfx_sampler_creation                               sampler_creation;
+
+  pass->scene_renderer = scene_renderer;
+
+  for ( uint32 i = 0; i < CRUDE_GRAPHICS_SSR_RADIANCE_TEXTURES_MAX_LEVELS; ++i )
+  {
+    pass->radiance_hierarchy_views_handles[ i ] = CRUDE_GFX_TEXTURE_HANDLE_INVALID;
+  }
+  pass->radiance_hierarchy_texture_handle = CRUDE_GFX_TEXTURE_HANDLE_INVALID;
+
+  sampler_creation = crude_gfx_sampler_creation_empty();
+  sampler_creation.address_mode_u = CRUDE_GFX_RHI_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_creation.address_mode_v = CRUDE_GFX_RHI_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_creation.address_mode_w = CRUDE_GFX_RHI_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_creation.mag_filter = CRUDE_GFX_RHI_FILTER_LINEAR;
+  sampler_creation.min_filter = CRUDE_GFX_RHI_FILTER_LINEAR;
+  sampler_creation.mip_filter = CRUDE_GFX_RHI_SAMPLER_MIPMAP_MODE_LINEAR;
+  sampler_creation.name = "radiance_hierarchy_sampler";
+
+  pass->radiance_hierarchy_sampler = crude_gfx_create_sampler( pass->scene_renderer->gpu, &sampler_creation );
+
+  crude_gfx_ssr_pass_on_resize( pass, pass->scene_renderer->gpu->renderer_size.x, pass->scene_renderer->gpu->renderer_size.y );
+}
+
+void
+crude_gfx_ssr_pass_deinitialize
+(
+  _In_ crude_gfx_ssr_pass                                 *pass
+)
+{
+  crude_gfx_device *gpu = pass->scene_renderer->gpu;
+  crude_gfx_destroy_texture( gpu, pass->radiance_hierarchy_texture_handle );
+  crude_gfx_destroy_sampler( gpu, pass->radiance_hierarchy_sampler );
+
+  for ( uint32 i = 0; i < CRUDE_GRAPHICS_SSR_RADIANCE_TEXTURES_MAX_LEVELS; ++i )
+  {
+    if ( CRUDE_RESOURCE_HANDLE_IS_VALID( pass->radiance_hierarchy_views_handles[ i ] ) )
+    {
+      crude_gfx_destroy_texture( gpu, pass->radiance_hierarchy_views_handles[ i ] );
+    }
+  }
+}
+
+void
+crude_gfx_ssr_pass_render
+(
+  _In_ void                                               *ctx,
+  _In_ crude_gfx_cmd_buffer                               *primary_cmd
+)
+{
+  crude_gfx_ssr_pass                                      *pass;
+  crude_gfx_device                                        *gpu;
+  crude_gfx_texture                                       *depth_texture;
+  crude_gfx_texture                                       *direct_radiance_texture;
+  crude_gfx_texture                                       *radiance_hierarchy_texture;
+
+  pass = CRUDE_REINTERPRET_CAST( crude_gfx_ssr_pass*, ctx );
+  gpu = pass->scene_renderer->gpu;
+  
+  if ( pass->scene_renderer->world_environment.ssr.type == CRUDE_WORLD_ENVIRONMENT_SSR_TYPE_NONE )
+  {
+    return;
+  }
+
+  radiance_hierarchy_texture = crude_gfx_access_texture( gpu, pass->radiance_hierarchy_texture_handle );
+  depth_texture = crude_gfx_access_texture( gpu, CRUDE_GFX_PASS_TEXTURE_HANDLE( ssr_pass.depth_texture ) );
+  direct_radiance_texture = crude_gfx_access_texture( gpu, CRUDE_GFX_PASS_TEXTURE_HANDLE( ssr_pass.direct_radiance_texture ) );
+
+  /* SSR Hit Calculation Pass  */
+  {
+    crude_gfx_pipeline_handle                              pipeline;
+    crude_gfx_ssr_hit_calculation_pass_push_constant_      pust_constant;
+    char const                                            *pass_name;
+
+    switch ( pass->scene_renderer->world_environment.ssr.type )
+    {
+    case CRUDE_WORLD_ENVIRONMENT_SSR_TYPE_LINEAR:
+    {
+      pass_name = "ssr_hit_calculation_linear";
+      break;
+    }
+    case CRUDE_WORLD_ENVIRONMENT_SSR_TYPE_HIZ:
+    {
+      pass_name = "ssr_hit_calculation_hiz";
+      break;
+    }
+    default:
+    {
+      CRUDE_ASSERT( false );
+      break;
+    }
+    }
+
+    crude_gfx_cmd_push_marker( primary_cmd, pass_name);
+
+    pipeline = crude_gfx_access_technique_pipeline_by_name( gpu, pass_name, 0u );
+    crude_gfx_cmd_bind_pipeline( primary_cmd, pipeline );
+
+    pust_constant = CRUDE_COMPOUNT_EMPTY( crude_gfx_ssr_hit_calculation_pass_push_constant_ );
+    pust_constant.scene = pass->scene_renderer->scene_hga.gpu_address;
+    pust_constant.ssr_max_steps = pass->scene_renderer->world_environment.ssr.max_steps;
+    pust_constant.ssr_max_distance = pass->scene_renderer->world_environment.ssr.max_distance;
+    pust_constant.ssr_stride_zcutoff = pass->scene_renderer->world_environment.ssr.stride_zcutoff;
+    pust_constant.ssr_stride = pass->scene_renderer->world_environment.ssr.stride;
+    pust_constant.ssr_z_thickness = pass->scene_renderer->world_environment.ssr.z_thickness;
+    pust_constant.depth_texture_index = depth_texture->handle.index;
+    pust_constant.depth_texture_size.x = depth_texture->width;
+    pust_constant.depth_texture_size.y = depth_texture->height;
+    pust_constant.normal_texture_index = CRUDE_GFX_PASS_TEXTURE_INDEX( ssr_pass.normal_texture );
+    pust_constant.ssr_hit_uv_depth_rdotv_texture_index = CRUDE_GFX_PASS_TEXTURE_INDEX( ssr_pass.ssr_hit_uv_depth_rdotv_texture );
+
+    crude_gfx_cmd_push_constant( primary_cmd, &pust_constant, sizeof( pust_constant ) );
+
+    crude_gfx_cmd_bind_bindless_descriptor_set( primary_cmd );
+
+    crude_gfx_cmd_dispatch( primary_cmd, ( depth_texture->width + 7 ) / 8, ( depth_texture->height + 7 ) / 8, 1u );
+
+    crude_gfx_cmd_pop_marker( primary_cmd );
+  }
+
+  /* SSR Blurring Pass  */
+  {
+    crude_gfx_cmd_add_image_barrier( primary_cmd, direct_radiance_texture->handle, CRUDE_GFX_RHI_RESOURCE_STATE_COPY_SOURCE, 0u, 1, false );
+    crude_gfx_cmd_add_image_barrier( primary_cmd, radiance_hierarchy_texture->handle, CRUDE_GFX_RHI_RESOURCE_STATE_COPY_DEST, 0u, radiance_hierarchy_texture->subresource.mip_level_count, false );
+    
+    crude_gfx_cmd_copy_texture( primary_cmd, direct_radiance_texture->handle, radiance_hierarchy_texture->handle );
+    
+    char const *convolve_passes_names[ ] = { "ssr_convolve_vertical", "ssr_convolve_horizontal" };
+
+    for ( uint32 pass_name_index = 0; pass_name_index < CRUDE_COUNTOF( convolve_passes_names ); ++pass_name_index )
+    {
+      crude_gfx_pipeline_handle                            pipeline;
+      crude_gfx_convolve_pass_push_constant_               pust_constant;
+      uint64                                               mip_width, mip_height;
+
+      crude_gfx_cmd_push_marker( primary_cmd, convolve_passes_names[ pass_name_index ] );
+
+      pipeline = crude_gfx_access_technique_pipeline_by_name( gpu, convolve_passes_names[ pass_name_index ], 0u );
+      crude_gfx_cmd_bind_pipeline( primary_cmd, pipeline );
+
+      crude_gfx_cmd_add_image_barrier( primary_cmd, radiance_hierarchy_texture->handle, CRUDE_GFX_RHI_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, 0u, radiance_hierarchy_texture->subresource.mip_level_count, false );
+      
+      crude_gfx_cmd_bind_bindless_descriptor_set( primary_cmd );
+      
+      mip_width = radiance_hierarchy_texture->width;
+      mip_height = radiance_hierarchy_texture->height;
+
+      for ( uint32 mip_index = 1; mip_index < radiance_hierarchy_texture->subresource.mip_level_count; ++mip_index )
+      {
+        uint64                                               prev_mip_width, prev_mip_height;
+      
+        prev_mip_width = mip_width;
+        prev_mip_height = mip_height;
+      
+        mip_width = mip_width / 2;
+        mip_height = mip_height / 2;
+      
+        crude_gfx_cmd_add_image_barrier_ext2( primary_cmd, radiance_hierarchy_texture->rhi_image, CRUDE_GFX_RHI_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, CRUDE_GFX_RHI_RESOURCE_STATE_UNORDERED_ACCESS, mip_index, 1u, false );
+        
+        pust_constant = CRUDE_COMPOUNT_EMPTY( crude_gfx_convolve_pass_push_constant_ );
+        pust_constant.dst_texture_index = pass->radiance_hierarchy_views_handles[ mip_index ].index;
+        pust_constant.src_texture_index = pass->radiance_hierarchy_views_handles[ mip_index - 1 ].index;
+        pust_constant.src_div_dst_texture_size.x = prev_mip_width / CRUDE_CAST( float32, mip_width );
+        pust_constant.src_div_dst_texture_size.y = prev_mip_height / CRUDE_CAST( float32, mip_height );
+        crude_gfx_cmd_push_constant( primary_cmd, &pust_constant, sizeof( pust_constant ) );
+        
+        crude_gfx_cmd_dispatch( primary_cmd, ( mip_width + 7 ) / 8, ( mip_height + 7 ) / 8, 1 );
+        
+        crude_gfx_cmd_add_image_barrier_ext2( primary_cmd, radiance_hierarchy_texture->rhi_image, CRUDE_GFX_RHI_RESOURCE_STATE_UNORDERED_ACCESS, CRUDE_GFX_RHI_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, mip_index, 1u, false );
+      }
+
+      radiance_hierarchy_texture->state = CRUDE_GFX_RHI_RESOURCE_STATE_PIXEL_SHADER_RESOURCE; 
+
+      crude_gfx_cmd_pop_marker( primary_cmd  );
+    }
+  }
+
+  /* SSR Resolve Pass (Cone Tracing ) */
+  {
+    crude_gfx_pipeline_handle                            pipeline;
+    crude_gfx_ssr_compose_pass_push_constant_            pust_constant;
+    
+    crude_gfx_cmd_push_marker( primary_cmd, "ssr_compose" );
+
+    pipeline = crude_gfx_access_technique_pipeline_by_name( gpu, "ssr_compose", 0u );
+    
+    crude_gfx_cmd_bind_pipeline( primary_cmd, pipeline );
+    pust_constant = CRUDE_COMPOUNT_EMPTY( crude_gfx_ssr_compose_pass_push_constant_ );
+    pust_constant.scene = pass->scene_renderer->scene_hga.gpu_address;
+    pust_constant.depth_texture_index = depth_texture->handle.index;
+    pust_constant.depth_texture_size.x = depth_texture->width;
+    pust_constant.depth_texture_size.y = depth_texture->height;
+
+    pust_constant.ssr_hit_uv_depth_rdotv_texture_index = CRUDE_GFX_PASS_TEXTURE_INDEX( ssr_pass.ssr_hit_uv_depth_rdotv_texture );
+    pust_constant.output_texture_index = CRUDE_GFX_PASS_TEXTURE_INDEX( ssr_pass.ssr_texture );
+    pust_constant.normal_texture_index = CRUDE_GFX_PASS_TEXTURE_INDEX( ssr_pass.normal_texture );
+      
+    pust_constant.radiance_hierarchy_texture_index = radiance_hierarchy_texture->handle.index;
+    pust_constant.packed_roughness_metalness_texture_index = CRUDE_GFX_PASS_TEXTURE_INDEX( ssr_pass.roughness_metalness_texture );;
+    pust_constant.radiance_hierarchy_mips_count = pass->radiance_hierarchy_levels;
+    pust_constant.fade_end = pass->scene_renderer->world_environment.ssr.fade_end;
+      
+    pust_constant.fade_start = pass->scene_renderer->world_environment.ssr.fade_start;
+    pust_constant.max_distance = pass->scene_renderer->world_environment.ssr.max_distance;
+
+    crude_gfx_cmd_push_constant( primary_cmd, &pust_constant, sizeof( pust_constant ) );
+
+    crude_gfx_cmd_bind_bindless_descriptor_set( primary_cmd );
+
+    crude_gfx_cmd_dispatch( primary_cmd, ( radiance_hierarchy_texture->width + 7 ) / 8, ( radiance_hierarchy_texture->height + 7 ) / 8, 1u );
+
+    crude_gfx_cmd_pop_marker( primary_cmd );
+  }
+}
+
+void
+crude_gfx_ssr_pass_on_resize
+(
+  _In_ void                                               *ctx,
+  _In_ uint32                                              new_width,
+  _In_ uint32                                              new_height
+)
+{
+  crude_gfx_ssr_pass                                      *pass;
+  crude_gfx_sampler_creation                               sampler_creation;
+  crude_gfx_texture_creation                               radiance_hierarchy_creation;
+  crude_gfx_texture_view_creation                          radiance_hierarchy_view_creation;
+  uint32                                                   radiance_hierarchy_width, radiance_hierarchy_height, width, height;
+
+  pass = CRUDE_REINTERPRET_CAST( crude_gfx_ssr_pass*, ctx );
+  
+  radiance_hierarchy_width = width = pass->scene_renderer->gpu->renderer_size.x;
+  radiance_hierarchy_height = height = pass->scene_renderer->gpu->renderer_size.y;
+  
+  pass->radiance_hierarchy_levels = 0;
+  while ( width >= 1 && height >= 1 )
+  {
+    pass->radiance_hierarchy_levels++;
+    
+    width = width / 2;
+    height = height / 2;
+  }
+
+  if ( CRUDE_RESOURCE_HANDLE_IS_VALID( pass->radiance_hierarchy_texture_handle ) )
+  {
+    crude_gfx_destroy_texture( pass->scene_renderer->gpu, pass->radiance_hierarchy_texture_handle );
+  }
+  
+  radiance_hierarchy_creation = crude_gfx_texture_creation_empty();
+  radiance_hierarchy_creation.format = CRUDE_GFX_RHI_FORMAT_R16G16B16A16_SFLOAT;
+  radiance_hierarchy_creation.type = CRUDE_GFX_TEXTURE_TYPE_TEXTURE_2D;
+  radiance_hierarchy_creation.width = radiance_hierarchy_width;
+  radiance_hierarchy_creation.height = radiance_hierarchy_height;
+  radiance_hierarchy_creation.depth = 1u;
+  radiance_hierarchy_creation.subresource.mip_level_count = pass->radiance_hierarchy_levels;
+  radiance_hierarchy_creation.flags = CRUDE_GFX_TEXTURE_MASK_COMPUTE;
+  crude_string_copy( radiance_hierarchy_creation.name, "radiance_hierarchy_texture_handle", sizeof( radiance_hierarchy_creation.name ) );
+  pass->radiance_hierarchy_texture_handle = crude_gfx_create_texture( pass->scene_renderer->gpu, &radiance_hierarchy_creation );
+
+  crude_gfx_link_texture_sampler( pass->scene_renderer->gpu, pass->radiance_hierarchy_texture_handle, pass->radiance_hierarchy_sampler );
+
+  radiance_hierarchy_view_creation = crude_gfx_texture_view_creation_empty( );
+  radiance_hierarchy_view_creation.view_type = CRUDE_GFX_RHI_IMAGE_VIEW_TYPE_2D;
+  radiance_hierarchy_view_creation.parent_texture_handle = pass->radiance_hierarchy_texture_handle;
+  radiance_hierarchy_view_creation.name = "radiance_hierarchy_view";
+  for ( uint32 i = 0; i < pass->radiance_hierarchy_levels; ++i )
+  {
+    if ( CRUDE_RESOURCE_HANDLE_IS_VALID( pass->radiance_hierarchy_views_handles[ i ] ) )
+    {
+      crude_gfx_destroy_texture( pass->scene_renderer->gpu, pass->radiance_hierarchy_views_handles[ i ] );
+    }
+  
+    radiance_hierarchy_view_creation.subresource.mip_base_level = i;
+    pass->radiance_hierarchy_views_handles[ i ] = crude_gfx_create_texture_view( pass->scene_renderer->gpu, &radiance_hierarchy_view_creation );
+  }
+}
+
+crude_gfx_render_graph_pass_container
+crude_gfx_ssr_pass_pack
+(
+  _In_ crude_gfx_ssr_pass                                 *pass
+)
+{
+  crude_gfx_render_graph_pass_container container = crude_gfx_render_graph_pass_container_empty();
+  container.ctx = pass;
+  container.on_resize = crude_gfx_ssr_pass_on_resize;
+  container.render = crude_gfx_ssr_pass_render;
+  return container;
+}

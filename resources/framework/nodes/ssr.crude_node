@@ -1,0 +1,65 @@
+{
+	"name":	"ssr",
+	"components":	[{
+			"type":	"crude_transform",
+			"translation":	[0, 0, 0],
+			"rotation":	[0, 0, 0, 1],
+			"scale":	[1, 1, 1]
+		}],
+	"children":	[{
+			"name":	"world_environment",
+			"components":	[{
+					"type":	"crude_world_environment",
+					"background_color":	[0, 0, 0],
+					"background_intencity":	0,
+					"ambient_color":	[1, 1, 1],
+					"ambient_intencity":	5,
+					"ssr.type":	1,
+					"ssr.max_steps":	200,
+					"ssr.max_distance":	100,
+					"ssr.fade_start":	0.5,
+					"ssr.fade_end":	1,
+					"ssr.stride_zcutoff":	0.00999999977648258,
+					"ssr.stride":	20,
+					"ssr.z_thickness":	0.600000023841858
+				}],
+			"children":	[]
+		}, {
+			"name":	"art_gallery",
+			"components":	[{
+					"type":	"crude_transform",
+					"translation":	[0, 0, 0],
+					"rotation":	[0, 0, 0, 1],
+					"scale":	[1, 1, 1]
+				}, {
+					"type":	"crude_gltf",
+					"path":	"framework\\models\\thirdparty\\art_gallery\\scene.gltf",
+					"animations_instances":	[{
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}]
+				}],
+			"children":	[]
+		}]
+}

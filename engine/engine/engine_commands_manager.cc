@@ -1,0 +1,161 @@
+#include <engine/engine.h>
+
+#include <engine/core/array.h>
+
+#include <engine/engine/engine_commands_manager.h>
+
+void
+crude_engine_commands_manager_initialize
+(
+  _In_ crude_engine_commands_manager                      *manager,
+  _In_ crude_engine                                       *engine,
+  _In_ crude_heap_allocator                               *allocator
+)
+{
+  manager->engine = engine;
+  CRUDE_ARRAY_INITIALIZE_WITH_LENGTH( manager->commands_queue, 0, crude_heap_allocator_pack( allocator ) );
+}
+
+void
+crude_engine_commands_manager_deinitialize
+(
+  _In_ crude_engine_commands_manager                      *manager
+)
+{
+  CRUDE_ARRAY_DEINITIALIZE( manager->commands_queue );
+}
+
+void
+crude_engine_commands_manager_push_reload_node_command
+(
+  _In_ crude_engine_commands_manager                      *manager
+)
+{
+  crude_engine_commands_manager_queue_command command = CRUDE_COMPOUNT_EMPTY( crude_engine_commands_manager_queue_command );
+  command.type = CRUDE_ENGINE_COMMANDS_MANAGER_QUEUE_COMMAND_TYPE_RELOAD_NODE;
+  CRUDE_ARRAY_PUSH( manager->commands_queue, command ); 
+}
+
+void
+crude_engine_commands_manager_push_load_node_command
+(
+  _In_ crude_engine_commands_manager                      *manager,
+  _In_ char const                                         *relative_filepath
+)
+{
+  crude_engine_commands_manager_queue_command command = CRUDE_COMPOUNT_EMPTY( crude_engine_commands_manager_queue_command );
+  command.type = CRUDE_ENGINE_COMMANDS_MANAGER_QUEUE_COMMAND_TYPE_LOAD_NODE;
+  crude_string_copy( command.load_node.relative_filepath, relative_filepath, sizeof( command.load_node.relative_filepath ) );
+  CRUDE_ARRAY_PUSH( manager->commands_queue, command );
+}
+
+void
+crude_engine_commands_manager_push_reload_techniques_command
+(
+  _In_ crude_engine_commands_manager                      *manager
+)
+{
+  crude_engine_commands_manager_queue_command command = CRUDE_COMPOUNT_EMPTY( crude_engine_commands_manager_queue_command );
+  command.type = CRUDE_ENGINE_COMMANDS_MANAGER_QUEUE_COMMAND_TYPE_RELOAD_TECHNIQUES;
+  CRUDE_ARRAY_PUSH( manager->commands_queue, command );
+}
+
+void
+crude_engine_commands_manager_update
+(
+  _In_ crude_engine_commands_manager                      *manager
+)
+{
+  for ( uint32 i = 0; i < CRUDE_ARRAY_LENGTH( manager->commands_queue ); ++i )
+  {
+    switch ( manager->commands_queue[ i ].type )
+    {
+//    case CRUDE_ENGINE_COMMANDS_MANAGER_QUEUE_COMMAND_TYPE_RELOAD_SCENE:
+//    {
+//      bool                                                 buffer_recreated;
+//
+//      crude_graphics_thread_manager_lock( &manager->engine->___graphics_thread_manager );
+//      crude_ecs *world = crude_scene_thread_manager_lock_world( &manager->engine->___scene_thread_manager );
+//      vkDeviceWaitIdle( manager->engine->___graphics_thread_manager.gpu.vk_device );
+//      
+//      crude_node_manager_clear( &manager->engine->node_manager, world );
+//      crude_physics_resources_manager_clear( &manager->engine->physics_resources_manager );
+//#if CRUDE_DEVELOP
+//      crude_string_buffer_clear( &manager->engine->debug_strings_buffer );
+//#endif
+//      crude_string_buffer_clear( &manager->engine->game_strings_buffer );
+//      game_setup_custom_preload_nodes_( game );
+//      game->main_node = crude_node_manager_get_node( &manager->engine->node_manager, game->current_scene_absolute_filepath );
+//      game_setup_custom_postload_nodes_( game );
+//
+//      crude_gfx_scene_renderer_update_instances_from_node( &game->scene_renderer, game->main_node );
+//      
+//      crude_audio_device_sound_stop( &game->audio_device, game->death_sound_handle );
+//      game->death_screen = false;
+//      game->death_overlap_color.w = 0;
+//
+//      crude_graphics_thread_manager_unlock( &manager->engine->___graphics_thread_manager );
+//      crude_scene_thread_manager_unlock_world( &manager->engine->___scene_thread_manager );
+//      break;
+//    }
+    case CRUDE_ENGINE_COMMANDS_MANAGER_QUEUE_COMMAND_TYPE_LOAD_NODE:
+    {
+      crude_gfx_rhi_wait_idle( &manager->engine->gpu.rhi_device );
+
+      crude_node_manager_clear( &manager->engine->node_manager );
+      crude_physics_shapes_manager_clear( &manager->engine->physics_shapes_manager );
+      crude_gfx_texture_manager_clear( &manager->engine->texture_manager );
+      crude_gfx_model_renderer_resources_manager_clear( &manager->engine->model_renderer_resources_manager );
+      crude_entity_destroy_hierarchy( manager->engine->world, manager->engine->main_node );
+      
+      crude_gfx_rhi_wait_idle( &manager->engine->gpu.rhi_device );
+      
+      /* We don't want to remember autosave node... since fast save will write to autosave :D */
+      if ( strstr( manager->commands_queue[ i ].load_node.relative_filepath, "___crude_engine_autosave" ) == NULL )
+      {
+        crude_string_copy( manager->engine->main_node_relative_filepath, manager->commands_queue[ i ].load_node.relative_filepath, sizeof( manager->engine->main_node_relative_filepath ) );
+      }
+
+      manager->engine->main_node = crude_node_manager_create_node( &manager->engine->node_manager, manager->commands_queue[ i ].load_node.relative_filepath, manager->engine->world );
+      
+      crude_gfx_scene_renderer_update_instances_from_node( &manager->engine->scene_renderer, manager->engine->world, manager->engine->main_node );
+      crude_audio_device_wait_wait_till_uploaded( &manager->engine->audio_device );
+
+      crude_physics_run_system_on_start( manager->engine->world );
+      
+      /* Hack number.... ahh i can't even remeber, we want to save selected level after game was stopped in editor :D */
+      if ( manager->engine->editor.editor_selected_entity_name[ 0 ] )
+      {
+        manager->engine->editor.selected_node = crude_ecs_lookup_entity_from_parent( manager->engine->world, manager->engine->main_node, manager->engine->editor.editor_selected_entity_name );
+      }
+
+      break;
+    }
+    case CRUDE_ENGINE_COMMANDS_MANAGER_QUEUE_COMMAND_TYPE_RELOAD_TECHNIQUES:
+    {
+#if CRUDE_DEVELOP
+      for ( uint32 i = 0; i < CRUDE_HASHMAPSTR_CAPACITY( manager->engine->gpu.resource_cache.techniques ); ++i )
+      {
+        if ( !crude_hashmapstr_backet_key_hash_valid( manager->engine->gpu.resource_cache.techniques[ i ].key.key_hash ) )
+        {
+          continue;
+        }
+        
+        crude_gfx_technique *technique = manager->engine->gpu.resource_cache.techniques[ i ].value; 
+        crude_gfx_destroy_technique_instant( &manager->engine->gpu, technique );
+      }
+
+      for ( uint32 i = 0; i < CRUDE_ARRAY_LENGTH( manager->engine->initialize_techniques_functions ); ++i )
+      {
+        manager->engine->initialize_techniques_functions[ i ]( &manager->engine->render_graph );
+      }
+      
+      crude_gfx_render_graph_on_techniques_reloaded( &manager->engine->render_graph );
+      break;
+#endif /* CRUDE_DEVELOP */
+    }
+    }
+  }
+
+  CRUDE_ARRAY_SET_LENGTH( manager->commands_queue, 0u );
+}

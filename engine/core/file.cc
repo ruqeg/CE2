@@ -1,0 +1,250 @@
+#include <stdio.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <direct.h>
+#define GetCurrentDir _getcwd
+#else
+#include <unistd.h>
+#define GetCurrentDir getcwd
+#endif
+
+#include <engine/core/string.h>
+#include <engine/core/assert.h>
+
+#include <engine/core/file.h>
+
+static_assert( sizeof( crude_file_iterator::founded_data ) == sizeof( WIN32_FIND_DATA ) );
+static_assert( sizeof( crude_file_iterator::handle ) == sizeof( HANDLE ) );
+
+static long _get_file_size
+(
+  _In_ FILE                                               *f
+)
+{
+  fseek( f, 0, SEEK_END );
+  long file_size_signed = ftell( f );
+  fseek( f, 0, SEEK_SET );
+  return file_size_signed;
+}
+
+bool
+crude_file_iterator_initialize
+(
+  _In_ crude_file_iterator                                *iterator,
+  _In_ char const                                         *search_filter
+)
+{
+  iterator->handle = CRUDE_CAST( crude_file_iterator_handle, FindFirstFile( search_filter, CRUDE_CAST( LPWIN32_FIND_DATAA, iterator->founded_data ) ), sizeof( iterator->handle ) );
+  return iterator->handle != CRUDE_CAST( crude_file_iterator_handle, INVALID_HANDLE_VALUE );
+}
+
+bool
+crude_file_iterator_is_directory
+(
+  _In_ crude_file_iterator                                *iterator
+)
+{
+  return CRUDE_CAST( WIN32_FIND_DATA*, iterator->founded_data )->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY;
+}
+
+char const*
+crude_file_iterator_name
+(
+  _In_ crude_file_iterator                                *iterator
+)
+{
+  return CRUDE_CAST( WIN32_FIND_DATA*, iterator->founded_data )->cFileName;
+}
+
+bool
+crude_file_iterator_next
+(
+  _In_ crude_file_iterator                                *iterator
+)
+{
+  return FindNextFile( CRUDE_CAST( HANDLE, iterator->handle ), CRUDE_CAST( LPWIN32_FIND_DATAA, iterator->founded_data ) );
+}
+
+void
+crude_file_iterator_deinitialize
+(
+  _In_ crude_file_iterator                                *iterator
+)
+{
+  FindClose( CRUDE_CAST( HANDLE, iterator->handle ) );
+}
+
+void
+crude_get_executable_directory
+(
+  _Out_ char                                              *buffer,
+  _In_ uint32                                              buffer_size
+)
+{
+  GetModuleFileName( NULL, buffer, buffer_size );
+
+  char *last_back_slash = strrchr( buffer, '\\');
+  if ( last_back_slash )
+  {
+    buffer[ last_back_slash - buffer + 1 ] = 0u;
+  }
+}
+
+void
+crude_get_current_working_directory
+(
+  _Out_ char                                              *buffer,
+  _In_ uint32                                              buffer_size
+)
+{
+  CRUDE_ASSERTM( CRUDE_CHANNEL_FILEIO, buffer_size >= FILENAME_MAX, "Working directory buffer size must be larger than %i!", FILENAME_MAX );
+#if defined( _WIN64 )
+  char* result = GetCurrentDir( buffer, buffer_size );
+  CRUDE_ASSERTM( CRUDE_CHANNEL_FILEIO, result, "Failed to get current directory!" );
+#endif // _WIN64
+}
+
+void
+crude_change_working_directory
+(
+  _In_ char                                               *path
+)
+{
+#if defined( _WIN64 )
+  if ( !SetCurrentDirectoryA( path ) )
+  {
+    CRUDE_LOG_ERROR( CRUDE_CHANNEL_FILEIO, "Cannot change current directory to %s\n", path );
+  }
+#else
+  if ( chdir( path ) != 0 )
+  {
+    CRUDE_LOG_ERROR( CRUDE_CHANNEL_FILEIO, "Cannot change current directory to %s\n", path );
+  }
+#endif // _WIN64
+}
+
+void
+crude_file_directory_from_path
+(
+  _Out_ char                                              *path
+)
+{
+  char* last_point = strrchr( path, '.' );
+  char* last_separator = strrchr( path, '/' );
+  if ( last_separator != NULL && last_point > last_separator )
+  {
+    *(last_separator + 1) = 0;
+  }
+  else
+  {
+    last_separator = strrchr( path, '\\' );
+    if ( last_separator != NULL && last_point > last_separator )
+    {
+      *( last_separator + 1 ) = 0;
+    }
+    else
+    {
+      CRUDE_LOG_ERROR( CRUDE_CHANNEL_FILEIO, "Malformed path %s", path );
+    }
+  }
+}
+
+bool
+crude_file_exist
+(
+  _In_ char const                                         *path
+)
+{
+#if defined( _WIN64 )
+  WIN32_FILE_ATTRIBUTE_DATA unused;
+  return GetFileAttributesExA( path, GetFileExInfoStandard, &unused );
+#else
+  int result = access( path, F_OK );
+  return ( result == 0 );
+#endif
+}
+
+bool
+crude_read_file
+(
+  _In_ char const                                         *filename,
+  _In_ crude_allocator_container                           allocator_container,
+  _Out_ uint8                                            **buffer,
+  _Out_ uint32                                            *buffer_size
+)
+{
+  FILE* file = fopen( filename, "r" );
+  
+  if ( !file )
+  {
+    CRUDE_LOG_ERROR( CRUDE_CHANNEL_FILEIO, "Cannor read file \"%s\"", filename );
+    return false;
+  }
+
+  sizet filesize = _get_file_size( file );
+  *buffer = CRUDE_REINTERPRET_CAST( uint8*, CRUDE_ALLOCATE( allocator_container, filesize + 1 ) );
+  *buffer_size = fread( *buffer, 1, filesize, file );
+  (*buffer)[ *buffer_size ] = 0;
+  fclose( file );
+  return true;
+}
+
+bool
+crude_read_file_binary
+(
+  _In_ char const                                         *filename,
+  _Out_opt_ uint8                                         *buffer,
+  _Out_ uint32                                            *buffer_size
+)
+{
+  FILE* file = fopen( filename, "rb" );
+  
+  if ( !file )
+  {
+    CRUDE_LOG_ERROR( CRUDE_CHANNEL_FILEIO, "Cannor read file \"%s\"", filename );
+    return false;
+  }
+
+  sizet filesize = _get_file_size( file );
+  if ( buffer )
+  {
+    *buffer_size = fread( buffer, 1, filesize, file );
+    buffer[ *buffer_size ] = 0;
+    fclose( file );
+    
+    CRUDE_ASSERT( *buffer_size < filesize + 1 );
+  }
+  else
+  {
+    *buffer_size = filesize + 1;
+  }
+  return true;
+}
+
+void
+crude_write_file
+(
+  _In_ char const                                         *filename,
+  _In_ void const                                         *buffer,
+  _In_ size_t                                              buffer_size
+)
+{
+  FILE* file = fopen( filename, "w" );
+  fwrite( buffer, buffer_size, 1, file );
+  fclose( file );
+}
+
+bool
+crude_file_delete
+(
+  _In_ char const                                         *path
+)
+{
+#if defined(_WIN64)
+  int result = remove( path );
+  return result != 0;
+#else
+  int result = remove( path );
+  return ( result == 0 );
+#endif
+}
