@@ -1,0 +1,64 @@
+{
+	"name":	"fps_character",
+	"components":	[{
+			"type":	"crude_transform",
+			"translation":	[0, 0, 0],
+			"rotation":	[0, 0, 0, 1],
+			"scale":	[1, 1, 1]
+		}, {
+			"type":	"crude_fps_character",
+			"simulation_enabled":	1,
+			"input_enabled":	1,
+			"force_character_camera_node":	0,
+			"acceleration":	0,
+			"friction":	0,
+			"gravity":	0,
+			"stop_speed":	0,
+			"min_speed":	0,
+			"walk_speed":	0,
+			"run_speed":	0,
+			"crouch_speed":	0,
+			"rotate_speed":	0,
+			"jump_velocity":	0,
+			"head_rotation_pitch_limit":	0,
+			"capsule_crouching_height":	1,
+			"capsule_standing_height":	2,
+			"capsule_radius":	1,
+			"head_crouching_position":	1.5,
+			"head_standing_position":	3
+		}],
+	"children":	[{
+			"name":	"center_pivot",
+			"components":	[{
+					"type":	"crude_transform",
+					"translation":	[0, 0, 0],
+					"rotation":	[0, 0, 0, 1],
+					"scale":	[1, 1, 1]
+				}],
+			"children":	[{
+					"name":	"head",
+					"components":	[{
+							"type":	"crude_transform",
+							"translation":	[0, 3, 0.699999988079071],
+							"rotation":	[0, 0, 0, 1],
+							"scale":	[1, 1, 1]
+						}],
+					"children":	[{
+							"name":	"camera",
+							"components":	[{
+									"type":	"crude_transform",
+									"translation":	[0, 0, 0],
+									"rotation":	[0, 1, 0, 0],
+									"scale":	[1, 1, 1]
+								}, {
+									"type":	"crude_camera",
+									"fov_radians":	1,
+									"near_z":	1,
+									"far_z":	300,
+									"aspect_ratio":	1.7999999523162842
+								}],
+							"children":	[]
+						}]
+				}]
+		}]
+}
