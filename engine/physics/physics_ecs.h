@@ -1,0 +1,56 @@
+#pragma once
+
+#include <engine/physics/physics_resource.h>
+#include <engine/scene/components_serialization.h>
+
+typedef struct crude_physics crude_physics;
+
+/**********************************************************
+ *
+ *                 Components
+ *
+ *********************************************************/
+CRUDE_API ECS_COMPONENT_DECLARE( crude_physics_body );
+CRUDE_API ECS_COMPONENT_DECLARE( crude_physics_body_handle );
+CRUDE_API ECS_COMPONENT_DECLARE( crude_physics_body_dynamic_tag );
+
+CRUDE_API CRUDE_PARSE_JSON_TO_COMPONENT_FUNC_DECLARATION( crude_physics_body );
+CRUDE_API CRUDE_PARSE_COMPONENT_TO_JSON_FUNC_DECLARATION( crude_physics_body );
+
+CRUDE_API CRUDE_COMPONENT_STRING_DECLARE( crude_physics_body );
+CRUDE_API CRUDE_COMPONENT_STRING_DECLARE( crude_physics_body_handle );
+
+CRUDE_API CRUDE_PARSE_COMPONENT_TO_IMGUI_FUNC_DECLARATION( crude_physics_body );
+CRUDE_API CRUDE_PARSE_COMPONENT_TO_IMGUI_FUNC_DECLARATION( crude_physics_body_handle );
+
+
+CRUDE_API void
+crude_physics_components_import
+(
+  _In_ crude_ecs                                          *world,
+  _In_ crude_components_serialization_manager             *manager
+);
+
+/**********************************************************
+ *
+ *                 System
+ *
+ *********************************************************/
+typedef struct crude_physics_system_context
+{
+  crude_physics                                           *physics;
+} crude_physics_system_context;
+
+CRUDE_API void
+crude_physics_system_import
+(
+  _In_ crude_ecs                                          *world,
+  _In_ crude_components_serialization_manager             *manager,
+  _In_ crude_physics_system_context                       *ctx
+);
+
+CRUDE_API void
+crude_physics_run_system_on_start
+(
+  _In_ crude_ecs                                          *world
+);

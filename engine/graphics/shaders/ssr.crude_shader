@@ -1,0 +1,568 @@
+
+#if defined( CRUDE_VALIDATOR_LINTING ) || defined( __cplusplus )
+#ifndef __cplusplus
+#extension GL_GOOGLE_include_directive : enable
+#endif
+#define SSR_COMPOSE
+//#define SSR_CONVOLVE_VERTICAL
+//#define SSR_CONVOLVE_HORIZONTAL
+//#define SSR_HIT_CALCULATION_HIZ
+#define CRUDE_COMPUTE
+#include "common/platform.h"
+#include "common/debug.h"
+#include "common/scene.h"
+#endif /* CRUDE_VALIDATOR_LINTING || __cplusplus */
+
+#if defined( SSR_HIT_CALCULATION_HIZ )
+#define SSR_HIT_CALCULATION
+#endif /* SSR_HIT_CALCULATION_HIZ */
+
+#if defined( SSR_COMPOSE )
+CRUDE_PUSH_CONSTANT( crude_gfx_ssr_compose_pass_push_constant_ )
+{
+  uint32                                                   ssr_hit_uv_depth_rdotv_texture_index;
+  uint32                                                   output_texture_index;
+  uint32                                                   depth_pyramid_nearest_texture_index;
+  uint32                                                   normal_texture_index;
+
+  uint32                                                   radiance_hierarchy_texture_index;
+  uint32                                                   packed_roughness_metalness_texture_index;
+  uint32                                                   radiance_hierarchy_mips_count;
+  float32                                                  fade_end;
+  
+  SceneRef                                                 scene;
+  float32                                                  fade_start;
+  float32                                                  max_distance;
+};
+#endif /* SSR_COMPOSE */
+
+#if defined( SSR_CONVOLVE_VERTICAL ) || defined( SSR_CONVOLVE_HORIZONTAL )
+CRUDE_PUSH_CONSTANT( crude_gfx_convolve_pass_push_constant_ )
+{
+  uint32                                                   src_texture_index;
+  uint32                                                   dst_texture_index;
+  XMFLOAT2                                                 src_div_dst_texture_size; /* src_size / dst_size */
+};
+
+#endif /* SSR_CONVOLVE_VERTICAL || SSR_CONVOLVE_HORIZONTAL */
+
+#if defined( SSR_HIT_CALCULATION )
+CRUDE_PUSH_CONSTANT( crude_gfx_ssr_hit_calculation_pass_push_constant_ )
+{
+  SceneRef                                                 scene;
+  float32                                                  ssr_max_steps;
+  uint32                                                   depth_pyramid_nearest_texture_index;
+
+  uint32                                                   normal_texture_index;
+  uint32                                                   ssr_hit_uv_depth_rdotv_texture_index;
+  XMFLOAT2                                                 padding;
+};
+#endif /* SSR_HIT_CALCULATION */
+
+#if !defined( __cplusplus )
+
+#if defined( SSR_HIT_CALCULATION )
+/**
+ * Source list:
+ * Screen Space Ray Tracing (McGuire Mara, 2014)
+ * GPU Pro 5 Hi-ZScreen-SpaceCone-Traced Reflections Yasin Uludag
+ * https://willpgfx.com/2015/07/screen-space-glossy-reflections/
+ * https://sugulee.wordpress.com/2021/01/16/performance-optimizations-for-screen-space-reflections-technique-part-1-linear-tracing-method/
+ */
+
+layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+
+vec3
+depth_plane_intersection
+(
+  in vec3                                                  o,
+  in vec3                                                  d,
+  in float                                                 z
+)
+{
+  return o + d * z;
+}
+
+vec2
+get_cells_count
+(
+  in int                                                   mip_level
+)
+{
+  return CRUDE_TEXTURE_MIP_SIZE( depth_pyramid_nearest_texture_index, mip_level );
+}
+
+vec2
+get_cell
+(
+  in vec2                                                  pos,
+  in vec2                                                  cell_count
+)
+{
+  return vec2( floor( pos * cell_count ) );
+}
+
+float
+get_cell_depth
+(
+  in vec2                                                  cell,
+  in vec2                                                  cells_count,
+  in int                                                   level
+)
+{
+  // TODO maybe fetch
+  return CRUDE_TEXTURE_MIP( depth_pyramid_nearest_texture_index, ( cell + vec2( 0.5 ) ) / cells_count, level ).r;
+}
+
+vec3
+intersect_cell_boundary
+(
+  in vec3                                                  orig_ts,
+  in vec3                                                  dist_ts, 
+  in vec2                                                  cell,
+  in vec2                                                  cells_count,
+  in vec2                                                  cell_step,
+  in vec2                                                  cell_boundary_offset_ts
+)
+{
+  vec3                                                     intersection;
+  vec2                                                     delta_ts, boundary_ts;
+  float                                                    t;
+
+  boundary_ts = ( cell + cell_step ) / cells_count;
+  boundary_ts += cell_boundary_offset_ts;
+  
+  delta_ts = boundary_ts - orig_ts.xy;
+  delta_ts /= dist_ts.xy;
+
+  t = min( delta_ts.x, delta_ts.y );
+  
+  intersection = depth_plane_intersection( orig_ts, dist_ts, t );
+  
+  return intersection;
+}
+
+bool
+crossed_cell_boundary
+(
+  in vec2                                                  old_cell_index,
+  in vec2                                                  new_cell_index
+)
+{
+  return ( old_cell_index.x != new_cell_index.x ) || (old_cell_index.y != new_cell_index.y );
+}
+
+void
+compute_position_and_reflection
+(
+  in ivec2                                                 coords,
+  out vec3                                                 orig,
+  out vec3                                                 dir,
+  out float                                                rdotv,
+  out float                                                max_distance
+)
+{
+  vec4                                                     end_cs;
+  vec3                                                     orig_nds;
+  vec3                                                     dir_vs;
+  vec3                                                     to_orig_vs, orig_vs, end_vs, normal_vs;
+  vec2                                                     uv, packed_normal;
+  vec2                                                     depth_texture_size;
+  float                                                    depth;
+  
+  depth_texture_size = CRUDE_TEXTURE_MIP_SIZE( depth_pyramid_nearest_texture_index, 0 );
+  uv = crude_uv_nearest( coords, depth_texture_size );
+
+  depth = CRUDE_TEXTURE_FETCH( depth_pyramid_nearest_texture_index, coords, 0 ).r;
+  packed_normal = CRUDE_TEXTURE_FETCH( normal_texture_index, 2 * coords, 0 ).xy;
+
+  orig_nds = crude_ndc_from_uv_depth( uv, depth );
+  orig_vs = crude_position_from_ndc( orig_nds, scene.data.camera.clip_to_view );
+
+  normal_vs = crude_octahedral_decode( packed_normal ) * mat3( scene.data.camera.world_to_view );
+
+  to_orig_vs = normalize( orig_vs );
+  dir_vs = reflect( to_orig_vs, normal_vs );
+  rdotv = dot( to_orig_vs, dir_vs );
+
+  end_vs = orig_vs + dir_vs * 1000;
+  
+  end_cs = vec4( end_vs, 1.0f ) * scene.data.camera.view_to_clip;
+  end_cs /= end_cs.w;
+
+  dir = normalize( end_cs.xyz - orig_nds );
+  dir.xy *= vec2( 0.5f, -0.5f );
+
+  orig = orig_nds;
+  orig.xy *= vec2( 0.5f, -0.5f );
+  orig.xy += vec2( 0.5f, 0.5f );
+
+  max_distance = dir.x >= 0 ? ( ( 1 - orig.x ) / dir.x ) : ( -orig.x / dir.x );
+  max_distance = min( max_distance, dir.y < 0 ? ( -orig.y / dir.y ) : ( ( 1 - orig.y ) / dir.y ) );
+  max_distance = min( max_distance, dir.z < 0 ? ( -orig.z / dir.z ) : ( ( 1 - orig.z ) / dir.z ) );
+}
+
+bool
+find_intersection_hiz
+(
+  in vec3                                                  orig_ts,
+  in vec3                                                  dir_ts,
+  in float                                                 max_distance_ts,
+  out vec3                                                 hit_ts
+)
+{
+  vec3                                                     dist_ts, ray_ts;
+  vec2                                                     cell_step, cell_boundary_offset_ts;
+  vec2                                                     ray_cell, cells_count;
+  float                                                    diff_z_ts, min_z_ts, max_z_ts, ray_way;
+  int                                                      level, max_level, start_level, stop_level;
+  uint                                                     iter;
+  bool                                                     is_backward_ray;
+
+  max_level = CRUDE_TEXTURE_MIP_COUNT( depth_pyramid_nearest_texture_index ) - 1;
+  
+  cell_step = vec2( dir_ts.x >= 0 ? 1 : -1, dir_ts.y >= 0 ? 1 : -1 );
+  cell_boundary_offset_ts = cell_step / CRUDE_TEXTURE_MIP_SIZE( depth_pyramid_nearest_texture_index, 0 ) / 128;
+  cell_step = crude_saturate_vec2( cell_step );
+    
+  ray_ts = orig_ts;
+  min_z_ts = ray_ts.z;
+  max_z_ts = ray_ts.z + dir_ts.z * max_distance_ts;
+
+  diff_z_ts = ( max_z_ts - min_z_ts );
+
+  dist_ts = dir_ts * max_distance_ts;
+  
+  start_level = 2;
+  stop_level = 0;
+
+  cells_count = get_cells_count( start_level );
+  
+  ray_cell = get_cell( ray_ts.xy, cells_count );
+  ray_ts = intersect_cell_boundary( orig_ts, dist_ts, ray_cell, cells_count, cell_step, 64.f * cell_boundary_offset_ts );
+    
+  level = start_level;
+  iter = 0;
+  is_backward_ray = dir_ts.z < 0;
+  ray_way = is_backward_ray ? -1 : 1;
+
+  while ( ( level >= stop_level ) && ( ray_ts.z * ray_way <= max_z_ts * ray_way ) && ( iter < ssr_max_steps ) )
+  {
+    vec3                                                   tmp_ray_ts;
+    vec2                                                   old_cell, new_cell;
+    float                                                  thickness, cell_min_z;
+    bool                                                   is_crossed_cell;
+  
+    cells_count = get_cells_count( level );
+    old_cell = get_cell( ray_ts.xy, cells_count );
+  
+    cell_min_z = get_cell_depth( old_cell, cells_count, level );
+    
+    tmp_ray_ts = ( ( cell_min_z > ray_ts.z ) && !is_backward_ray )
+      ? depth_plane_intersection( orig_ts, dist_ts, ( cell_min_z - min_z_ts ) / diff_z_ts )
+      : ray_ts;
+    
+    new_cell = get_cell( tmp_ray_ts.xy, cells_count );
+    
+    thickness = ( level == 0 ) ? ( ray_ts.z - cell_min_z ) : 0;
+    
+    #define MAX_HIZ_THICKNESS 0.001
+    is_crossed_cell = ( is_backward_ray && ( cell_min_z > ray_ts.z ) )
+      || ( thickness > MAX_HIZ_THICKNESS )
+      || crossed_cell_boundary( old_cell, new_cell );
+    
+    ray_ts = is_crossed_cell ? intersect_cell_boundary( orig_ts, dist_ts, old_cell, cells_count, cell_step, cell_boundary_offset_ts ) : tmp_ray_ts;
+    level = is_crossed_cell ? min( max_level, level + 1 ) : ( level - 1 );
+        
+    ++iter;
+  }
+    
+  hit_ts = ray_ts;
+
+  return ( level < stop_level );
+}
+
+void main()
+{
+  ivec2                                                    coords;
+  vec3                                                     orig, dir, hit;
+  float                                                    max_distance, rdotv;
+  bool                                                     intersection;
+
+  coords = ivec2( gl_GlobalInvocationID.xy );
+
+#if defined( SSR_HIT_CALCULATION_HIZ )
+  compute_position_and_reflection( coords, orig, dir, rdotv, max_distance );
+  intersection = find_intersection_hiz( orig, dir, max_distance, hit );
+#endif /* SSR_HIT_CALCULATION_HIZ */
+  
+  CRUDE_IMAGE_STORE( ssr_hit_uv_depth_rdotv_texture_index, coords, vec4( hit, max( rdotv, 0 ) ) * ( intersection ? 1.0f : 0.0f ) );
+}
+
+#endif /* SSR_HIT_CALCULATION */
+
+#if defined( SSR_CONVOLVE_VERTICAL ) || defined( SSR_CONVOLVE_HORIZONTAL )
+
+layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+
+#if defined( SSR_CONVOLVE_HORIZONTAL )
+const ivec2 offsets[7] = {{-3, 0}, {-2, 0}, {-1, 0}, {0, 0}, {1, 0}, {2, 0}, {3, 0}};
+#elif defined( SSR_CONVOLVE_VERTICAL ) 
+const ivec2 offsets[ 7 ] =  {{0, -3}, {0, -2}, {0, -1}, {0, 0}, {0, 1}, {0, 2}, {0, 3}};
+#endif
+const float weights[7] = {0.001f, 0.028f, 0.233f, 0.474f, 0.233f, 0.028f, 0.001f};
+
+void main()
+{
+  ivec2 dst_coords = ivec2( gl_GlobalInvocationID.xy );
+  ivec2 src_coords = ivec2( dst_coords * src_div_dst_texture_size );
+
+  vec4 color = vec4( 0.0f, 0.0f, 0.0f, 1.0f );
+
+  #pragma unroll
+  for( uint i = 0u; i < 7u; ++i)
+  {
+    color += CRUDE_TEXTURE_FETCH( src_texture_index, ivec2( src_coords + offsets[ i ] ), 0 ) * weights[ i ];
+  }
+
+  CRUDE_IMAGE_STORE( dst_texture_index, dst_coords, vec4( color.xyz, 1.0f ) );
+}
+
+#endif
+
+#if defined( SSR_COMPOSE )
+
+// TODO ?
+#define CNST_MAX_SPECULAR_EXP 1024
+#define SSR_FADE_ON_DISTANCE 0
+
+layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+
+float
+roughness_to_specular_power
+(
+  in float                                                 r
+)
+{
+  return 2 / ( pow( r, 4 ) ) - 2;
+}
+
+float
+specular_power_to_cone_angle
+(
+  in float                                                 specular_power
+)
+{
+  if ( specular_power >= exp2( CNST_MAX_SPECULAR_EXP ) )
+  {
+    return 0.0f;
+  }
+  
+  const float xi = 0.244f;
+  float exponent = 1.0f / ( specular_power + 1.0f );
+  return acos( pow( xi, exponent ));
+}
+
+float
+isosceles_triangle_opposite
+(
+  in float                                                 adjacent_length,
+  in float                                                 cone_theta
+)
+{
+  return 2.0f * tan( cone_theta ) * adjacent_length;
+}
+
+float
+isosceles_triangle_in_radius
+(
+  in float                                                 a,
+  in float                                                 h
+)
+{
+  float a2 = a * a;
+  float fh2 = 4.0f * h * h;
+  return ( a * ( sqrt( a2 + fh2 ) - a ) ) / ( 4.0f * h );
+}
+
+float
+isosceles_triangle_next_adjacent
+(
+  in float                                                 adjacent_length,
+  in float                                                 incircle_radius
+)
+{
+  return adjacent_length - ( incircle_radius * 2.0f );
+}
+
+vec4
+cone_sample_weighted_color
+(
+  in uint                                                  radiance_texture_index,
+  in vec2                                                  sample_pos,
+  in float                                                 mip_channel,
+  in float                                                 gloss
+)
+{
+  /* samp trilinear clamp */
+  vec3 sample_radiance = CRUDE_TEXTURE_MIP( radiance_texture_index, sample_pos, mip_channel ).rgb;
+  return vec4( sample_radiance * gloss, gloss );
+}
+
+vec4
+calculate_total_color
+(
+  in vec2                                                  ssr_hit_uv,
+  in vec2                                                  screen_uv,
+  in vec2                                                  depth_texture_size,
+  in float                                                 roughness,
+  out float                                                remaining_alpha
+)
+{
+  vec4                                                     total_color;
+  vec2                                                     adjacent_unit, delta_uv;
+  float                                                    max_mip_level, gloss, gloss_mult, adjacent_length;
+  float                                                    specular_power, cone_theta;
+
+  total_color = vec4( 0.0f, 0.0f, 0.0f, 0.0f );
+  remaining_alpha = 1.0f;
+  max_mip_level = float( radiance_hierarchy_mips_count ) - 1.0f;
+  
+  specular_power = roughness_to_specular_power( roughness );
+  cone_theta = specular_power_to_cone_angle( specular_power ) * 0.5f;
+
+  gloss = 1.f - roughness;
+  gloss_mult = gloss;
+
+  delta_uv = ssr_hit_uv - screen_uv;
+  adjacent_length = length( delta_uv );
+  adjacent_unit = normalize( delta_uv );
+  
+  for ( int i = 0; i < 14; ++i )
+  {
+    vec4                                                   new_color;
+    vec2                                                   sample_pos;
+    float                                                  mip_channel, opposite_length, incircle_size;
+
+    opposite_length = isosceles_triangle_opposite( adjacent_length, cone_theta );
+    incircle_size = isosceles_triangle_in_radius( opposite_length, adjacent_length );
+
+    sample_pos = screen_uv + adjacent_unit * ( adjacent_length - incircle_size );
+    mip_channel = clamp( log2( incircle_size * max( depth_texture_size.x, depth_texture_size.y ) ), 0.0f, max_mip_level );
+
+    new_color = cone_sample_weighted_color( radiance_hierarchy_texture_index, sample_pos, mip_channel, gloss_mult );
+
+    remaining_alpha -= new_color.a;
+    if ( remaining_alpha < 0.0f )
+    {
+      new_color.rgb *= ( 1.0f - abs( remaining_alpha ) );
+    }
+    total_color += new_color;
+
+    if ( total_color.a >= 1.0f )
+    {
+      break;
+    }
+
+    adjacent_length = isosceles_triangle_next_adjacent( adjacent_length, incircle_size );
+    gloss_mult *= gloss;
+  }
+
+  return total_color;
+}
+
+float
+calculate_total_fade
+(
+  in vec2                                                  screen_uv,
+  in float                                                 remaining_alpha,
+  in vec2                                                  ssr_hit_uv,
+  in float                                                 ssr_hit_depth,
+  in float                                                 ssr_hit_rdotv,
+  in vec3                                                  normal_vs,
+  in float                                                 roughness,
+  in float                                                 depth,
+  out vec3                                                 to_eye
+)
+{
+#if SSR_FADE_ON_DISTANCE
+  vec3                                                     ray_hit_position_vs;
+  float                                                    fade_on_distance;
+#endif
+  vec3                                                     position_ss, to_position_vs, pixel_vs;
+  vec2                                                     boundary;
+  float                                                    fade_on_border, fade_diff_rcp, fade_on_perpendicular, fade_on_roughness;
+  float                                                    total_fade;
+
+  position_ss = vec3( screen_uv, depth );
+  pixel_vs = crude_position_from_depth( screen_uv, depth, scene.data.camera.clip_to_view );
+  to_position_vs = normalize( pixel_vs );
+
+  to_eye = -to_position_vs;
+
+  boundary = abs( ssr_hit_uv.xy - vec2( 0.5f, 0.5f ) ) * 2.0f;
+  fade_diff_rcp = 1.0f / ( fade_end - fade_start );
+  fade_on_border = 1.0f - crude_saturate_scalar( ( boundary.x - fade_start ) * fade_diff_rcp );
+  fade_on_border *= 1.0f - crude_saturate_scalar( ( boundary.y - fade_start ) * fade_diff_rcp );
+  fade_on_border = smoothstep( 0.0f, 1.0f, fade_on_border );
+  
+  fade_on_perpendicular = crude_saturate_scalar( mix( 0.0f, 1.0f, crude_saturate_scalar( ssr_hit_rdotv * 4.0f ) ) );
+  fade_on_roughness = crude_saturate_scalar( mix( 0.0f, 1.0f, ( 1.f - roughness ) * 4.0f ) );
+  total_fade = fade_on_border * fade_on_perpendicular * fade_on_roughness * ( 1.0f - crude_saturate_scalar( remaining_alpha ) );
+  
+#if SSR_FADE_ON_DISTANCE
+  ray_hit_position_vs = crude_position_from_depth( ssr_hit_uv, ssr_hit_depth, scene.data.camera.clip_to_view );
+  fade_on_distance = 1.0f - crude_saturate_scalar( distance( ray_hit_position_vs, pixel_vs ) / max_distance );
+  total_fade *= fade_on_distance; 
+#endif
+  return total_fade;
+}
+
+void main()
+{
+  ivec2                                                    coords;
+  vec4                                                     total_color, ssr_data_packed;
+  vec3                                                     normal_vs, to_eye, specular;
+  vec2                                                     packed_normal, screen_uv, ssr_hit_uv, depth_texture_size;
+  float                                                    remaining_alpha, ssr_hit_depth, ssr_hit_rdotv, roughness, depth;
+  float                                                    total_fade;
+  vec3                                                     fallback_color;
+
+  coords = ivec2( gl_GlobalInvocationID.xy );
+
+  ssr_data_packed = CRUDE_TEXTURE_FETCH( ssr_hit_uv_depth_rdotv_texture_index, coords, 0 ).xyzw;
+  depth = CRUDE_TEXTURE_FETCH( depth_pyramid_nearest_texture_index, coords, 0 ).r;
+  packed_normal = CRUDE_TEXTURE_FETCH( normal_texture_index, 2 * coords, 0 ).xy;
+  roughness = CRUDE_TEXTURE_FETCH( packed_roughness_metalness_texture_index, 2 * coords, 0 ).x;
+  
+  normal_vs = crude_octahedral_decode( packed_normal ) * mat3( scene.data.camera.world_to_view );
+
+  ssr_hit_uv = ssr_data_packed.xy;
+  ssr_hit_depth = ssr_data_packed.z;
+  ssr_hit_rdotv = ssr_data_packed.w;
+
+  depth_texture_size = CRUDE_TEXTURE_MIP_SIZE( depth_pyramid_nearest_texture_index, 0 );
+  screen_uv = crude_uv_nearest( coords, depth_texture_size );
+  
+  fallback_color = vec3( 0, 0, 0 );// indirectSpecularBuffer.Load(loadIndices).rgb;
+
+  /* either means no hit or the ray faces back towards the camera */
+  if ( ssr_hit_rdotv <= 0.0f )
+  {
+    CRUDE_IMAGE_STORE( output_texture_index, coords, vec4( fallback_color, 1.0f ) );
+    return;
+  }
+
+  total_color = calculate_total_color( ssr_hit_uv, screen_uv, depth_texture_size, roughness, remaining_alpha );
+  total_fade = calculate_total_fade( screen_uv, remaining_alpha, ssr_hit_uv, ssr_hit_depth, ssr_hit_rdotv, normal_vs, roughness, depth, to_eye );
+  
+  specular = crude_schlick_fresnel( CRUDE_DEAFULT_F0, abs( dot( normal_vs, to_eye ) ) ) * CRUDE_1DIVPI;
+
+  //CRUDE_IMAGE_STORE( output_texture_index, coords, vec4( ssr_hit_uv.yyy, 1 ) );
+  //CRUDE_IMAGE_STORE( output_texture_index, coords, vec4( fade_on_border.xxx, 1 ) );
+  CRUDE_IMAGE_STORE( output_texture_index, coords, vec4( mix( fallback_color, total_color.rgb * specular, total_fade ), 1.0f ) );
+}
+
+#endif /* SSR_COMPOSE */
+
+#endif /* !__cplusplus */

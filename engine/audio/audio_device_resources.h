@@ -1,0 +1,83 @@
+#pragma once
+
+#include <miniaudio.h>
+
+#include <engine/core/alias.h>
+#include <engine/core/resource_pool.h>
+#include <engine/audio/audio_config.h>
+
+typedef struct crude_sound_handle
+{
+  uint32                                                   index;
+} crude_sound_handle;
+
+typedef struct crude_sound_group_handle
+{
+  uint32                                                   index;
+} crude_sound_group_handle;
+
+#define CRUDE_SOUND_GROUP_HANDLE_INVALID                   ( CRUDE_COMPOUNT( crude_sound_group_handle, { CRUDE_RESOURCE_INDEX_INVALID } ) )
+#define CRUDE_SOUND_HANDLE_INVALID                         ( CRUDE_COMPOUNT( crude_sound_handle, { CRUDE_RESOURCE_INDEX_INVALID } ) )
+
+typedef enum crude_audio_sound_positioning
+{
+  CRUDE_AUDIO_SOUND_POSITIONING_ABSOLUTE = ma_positioning_absolute,
+  CRUDE_AUDIO_SOUND_POSITIONING_RELATIVE = ma_positioning_relative
+} crude_audio_sound_positioning;
+
+typedef enum crude_audio_sound_attenuation_model
+{
+  CRUDE_AUDIO_SOUND_ATTENUATION_MODEL_NONE = ma_attenuation_model_none,
+  CRUDE_AUDIO_SOUND_ATTENUATION_MODEL_INVERSE = ma_attenuation_model_inverse,
+  CRUDE_AUDIO_SOUND_ATTENUATION_MODEL_LINEAR = ma_attenuation_model_linear,
+  CRUDE_AUDIO_SOUND_ATTENUATION_MODEL_EXPONENTIAL = ma_attenuation_model_exponential
+} crude_audio_sound_attenuation_model;
+
+typedef struct crude_sound_creation
+{
+  char                                                     relative_filepath[ CRUDE_AUDIO_RELATIVE_FILEPATH_LENGTH_MAX ];
+  bool                                                     looping;
+  bool                                                     async_loading;
+  bool                                                     stream;
+  bool                                                     decode;
+  crude_audio_sound_positioning                            positioning;
+  crude_audio_sound_attenuation_model                      attenuation_model;
+  float32                                                  max_distance;
+  float32                                                  min_distance;
+  float32                                                  rolloff;
+  crude_sound_group_handle                                 sound_group_handle;
+} crude_sound_creation;
+
+typedef struct crude_audio_player
+{
+  char                                                     relative_filepath[ CRUDE_AUDIO_RELATIVE_FILEPATH_LENGTH_MAX ];
+  bool                                                     looping;
+  bool                                                     stream;
+  crude_audio_sound_positioning                            positioning;
+  float32                                                  max_distance;
+  float32                                                  min_distance;
+  float32                                                  rolloff;
+  float32                                                  start_volume;
+  bool                                                     autoplay;
+} crude_audio_player;
+
+typedef struct crude_audio_player_handle
+{
+  crude_sound_handle                                       sound_handle;
+  float32                                                  last_local_to_world_update_time;
+} crude_audio_player_handle;
+
+typedef struct crude_audio_listener
+{
+  float32                                                  last_local_to_world_update_time;
+} crude_audio_listener;
+
+CRUDE_API crude_sound_creation
+crude_sound_creation_empty
+(
+);
+
+CRUDE_API crude_audio_player
+crude_audio_player_empty
+(
+);
