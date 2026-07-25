@@ -1,0 +1,159 @@
+
+#if defined( CRUDE_VALIDATOR_LINTING ) || defined( __cplusplus )
+#ifndef __cplusplus
+#extension GL_GOOGLE_include_directive : enable
+#endif
+#define RAY_TRACING_SOLID
+//#define CRUDE_RAYGEN
+#define CRUDE_CLOSEST_HIT
+//#define CRUDE_STAGE_FRAGMENT
+
+#include "common/platform.h"
+#include "common/debug.h"
+#include "common/scene.h"
+#include "common/culling.h"
+#include "common/light.h"
+#endif /* CRUDE_VALIDATOR_LINTING || __cplusplus */
+
+#if defined( RAY_TRACING_SOLID  )
+
+CRUDE_PUSH_CONSTANT( crude_gfx_pointshadow_culling_pass_push_constant_ )
+{
+  SceneRef                                                 scene;
+  MeshDrawsRef                                             mesh_draws;
+
+  MeshInstancesDrawsRef                                    mesh_instance_draws;
+  VerticesRef                                              vertices;
+
+  uint32                                                   sbt_offset;
+  uint32                                                   sbt_stride;
+  uint32                                                   miss_index;
+  uint32                                                   out_image_index;
+};
+#endif /* RAY_TRACING_SOLID */
+
+#if !defined( __cplusplus )
+
+#extension GL_EXT_ray_tracing : enable
+#extension GL_EXT_ray_tracing_position_fetch  : require
+
+#if defined( RAY_TRACING_SOLID )
+
+CRUDE_ACCELERATION_STRUCTURE_DEFINE( acceleration_stucture );
+
+struct ray_payload
+{
+  vec3                                                     color;
+  ivec2                                                    launch_id;
+};
+
+#if defined( CRUDE_RAYGEN )
+
+layout(location=0) rayPayloadEXT ray_payload payload;
+
+vec3
+compute_ray_dir
+(
+  in uvec3                                      launchID,
+  in uvec3                                      launchSize
+)
+{
+  float x = ( 2 * ( float( launchID.x ) + 0.5 ) / float( launchSize.x ) - 1.0 );
+  float y = ( 1.0 - 2 * ( float( launchID.y ) + 0.5 ) / float( launchSize.y ) );
+#if CRUDE_RIGHT_HAND
+  vec3 dir = vec3( x, y / scene.data.camera.aspect_ratio, -scene.data.camera.znear ) * mat3( scene.data.camera.view_to_world );
+#else
+  vec3 dir = vec3( x, y / scene.data.camera.aspect_ratio, scene.data.camera.znear ) * mat3( scene.data.camera.view_to_world );
+#endif
+  dir = normalize( dir );
+  return dir.xyz;
+}
+
+void main()
+{
+  payload.color = vec3( 0, 0, 0 );
+  payload.launch_id = ivec2( gl_LaunchIDEXT.xy );
+
+  traceRayEXT(
+    acceleration_stucture, /* topLevel */
+    gl_RayFlagsOpaqueEXT, /* rayFlags */
+    0xff, /* cullMask */
+    sbt_offset, /* sbtRecordOffset */
+    sbt_stride, /* sbtRecordStride */
+    miss_index, /* missIndex */
+    scene.data.camera.position, /* origin */
+    0.0, /* tmin */
+    compute_ray_dir( gl_LaunchIDEXT, gl_LaunchSizeEXT ), /* direction */
+    1000.0, /* Tmax */
+    0 /* payload index */
+  );
+
+  imageStore( global_images_2d[ out_image_index ], ivec2( gl_LaunchIDEXT.xy ), vec4( payload.color, 1 ) );
+}
+
+#endif /* CRUDE_RAYGEN */
+
+#if defined( CRUDE_CLOSEST_HIT )
+
+layout(location=0) rayPayloadInEXT ray_payload payload;
+hitAttributeEXT vec2 barycentric_weights;
+
+void main()
+{
+  crude_gfx_mesh_draw                                    mesh_draw;
+  mat4                                                   mesh_to_world, world_to_mesh;
+  vec3                                                   normal, p0_model, p1_model, p2_model, model_position, world_position, diffuse, albedo;
+  vec2                                                   texcoord, texcoord0, texcoord1, texcoord2;
+  float                                                  a, b, c, ndotl, attenuation;
+  uint                                                   i0, i1, i2;
+  uint                                                   mesh_index;
+  
+  b = barycentric_weights.x;
+  c = barycentric_weights.y;
+  a = 1 - b - c;
+  payload.color = vec3( a, b, c );
+  
+  mesh_index = mesh_instance_draws.data[ gl_InstanceCustomIndexEXT ].mesh_draw_index;
+  mesh_draw = mesh_draws.data[ mesh_index ];
+  
+  world_to_mesh = mesh_instance_draws.data[ gl_InstanceCustomIndexEXT ].world_to_mesh;
+  mesh_to_world = mesh_instance_draws.data[ gl_InstanceCustomIndexEXT ].mesh_to_world;
+  
+  i0 = mesh_draw.index_buffer.data[ gl_PrimitiveID * 3 ];
+  i1 = mesh_draw.index_buffer.data[ gl_PrimitiveID * 3 + 1 ];
+  i2 = mesh_draw.index_buffer.data[ gl_PrimitiveID * 3 + 2 ];
+   
+  p0_model = gl_HitTriangleVertexPositionsEXT[ 0 ];
+  p1_model = gl_HitTriangleVertexPositionsEXT[ 1 ];
+  p2_model = gl_HitTriangleVertexPositionsEXT[ 2 ];
+  
+  normal = normalize( cross( p1_model - p0_model, p2_model - p1_model ) );
+  
+  texcoord0 = vec2( vertices.data[ i0 ].tu, vertices.data[ i0 ].tv );
+  texcoord1 = vec2( vertices.data[ i1 ].tu, vertices.data[ i1 ].tv );
+  texcoord2 = vec2( vertices.data[ i2 ].tu, vertices.data[ i2 ].tv );
+
+  world_position = a * p0_model + b * p1_model + c * p2_model;
+  texcoord = ( a * texcoord0 + b * texcoord1 + c * texcoord2 );
+  
+  albedo = mesh_draw.albedo_color_factor.xyz;
+  if ( mesh_draw.textures.x != CRUDE_SHADER_TEXTURE_UNDEFINED )
+  {
+    albedo = pow( texture( global_textures[ nonuniformEXT( mesh_draw.textures.x ) ], texcoord ).xyz * albedo, vec3( 2.2 ) );
+  }
+  
+  payload.color = vec3( world_position );// albedo;
+}
+
+#endif /* CRUDE_CLOSEST_HIT */
+
+#if defined( CRUDE_MISS )
+layout(location=0) rayPayloadInEXT ray_payload payload;
+
+void main()
+{
+  payload.color = vec3( 0.f, 0.f, 0.2f );
+}
+#endif /* CRUDE_MISS */
+#endif /* RAY_TRACING_SOLID */
+#endif /* !__cplusplus */

@@ -1,0 +1,823 @@
+#pragma once
+
+#include <SDL3/SDL.h>
+#include <threads.h>
+
+#include <engine/core/hashmapstr.h>
+#include <engine/core/string.h>
+#include <engine/core/assert.h>
+#include <engine/core/environment.h>
+#include <engine/graphics/command_buffer.h>
+#include <engine/graphics/gpu_memory.h>
+#include <engine/graphics/gpu_crash_tracker.h>
+#include <engine/graphics/rhi/rhi.h>
+
+#include <engine/graphics/shaders/common/platform.h>
+
+#if CRUDE_GFX_GPU_PROFILER
+typedef struct crude_gfx_gpu_time_query crude_gfx_gpu_time_query;
+typedef struct crude_gfx_gpu_time_query_tree crude_gfx_gpu_time_query_tree;
+typedef struct crude_gfx_gpu_time_queries_manager crude_gfx_gpu_time_queries_manager;
+#endif
+
+typedef struct crude_gfx_device crude_gfx_device;
+
+/************************************************
+ *
+ * GPU Device Structs
+ * 
+ ***********************************************/
+typedef struct crude_gfx_resource_cache
+{
+  CRUDE_HASHMAPSTR( crude_gfx_technique* )                *techniques;
+} crude_gfx_resource_cache;
+
+typedef struct crude_gfx_device_creation
+{
+  SDL_Window                                              *sdl_window;
+  crude_heap_allocator                                    *allocator;
+  crude_environment                                       *environment;
+} crude_gfx_device_creation;
+
+typedef struct crude_gfx_device
+{
+  /* Context */
+  crude_environment                                       *environment;
+  SDL_Window                                              *sdl_window;
+  crude_heap_allocator                                    *allocator;
+
+  /* Smth */
+  uint32                                                   previous_frame;
+  uint32                                                   current_frame;
+  uint32                                                   absolute_frame;
+
+  crude_gfx_linear_allocator                               frame_linear_allocator;
+  /**
+   * Default sampler and texture references.
+   * These fallback resources will be used when
+   * sampler/texture is undefined.
+   */
+  crude_gfx_sampler_handle                                 default_sampler;
+  /**
+   * GPU Device resources memory pools.
+   */
+  crude_resource_pool                                      buffers;
+  crude_resource_pool                                      textures;
+  crude_resource_pool                                      pipelines;
+  crude_resource_pool                                      samplers;
+  crude_resource_pool                                      descriptor_set_layouts;
+  crude_resource_pool                                      descriptor_sets;
+  crude_resource_pool                                      render_passes;
+  crude_resource_pool                                      command_buffers;
+  crude_resource_pool                                      shaders;
+  crude_resource_pool                                      framebuffers;
+  crude_resource_pool                                      techniques;
+  crude_resource_pool                                      cmd_pools;
+  crude_resource_pool                                      cmd_buffers;
+  /**
+   * High Level resoruces managment (material, technique, textures updating) 
+   */
+  crude_gfx_texture_handle                                 textures_to_update[ 128 ];
+  uint32                                                   num_textures_to_update;
+  mtx_t                                                    texture_update_mutex;
+  mtx_t                                                    resource_deletion_queue_mutex;
+  crude_gfx_resource_cache                                 resource_cache;
+  crude_gfx_cmd_pool_handle                                immediate_transfer_cmd_pool;
+  crude_gfx_cmd_buffer_handle                              immediate_transfer_cmd_buffer;
+  crude_gfx_rhi_fence                                      rhi_immediate_fence;
+
+  /**
+   * Queue to remove or update bindless texture.
+   */
+  crude_gfx_resource_update                               *resource_deletion_queue;
+  crude_gfx_resource_update                               *texture_to_update_bindless;
+  /**
+   * Stores current command buffers added to the queue.
+   */
+  crude_gfx_cmd_buffer                                   **queued_command_buffers;
+  /*
+   * 
+   */
+#if CRUDE_GFX_NSIGHT_AFTERMATH
+  crude_gfx_gpu_crash_tracker                              crash_tracker;
+#endif
+  crude_gfx_rhi_instance                                   rhi_instance;
+  crude_gfx_rhi_surface                                    rhi_surface;
+  crude_gfx_rhi_surface_format                             surface_format;
+  crude_gfx_rhi_device                                     rhi_device;
+  crude_gfx_rhi_swapchain                                  rhi_swapchain;
+  crude_gfx_rhi_semaphore                                  rhi_graphics_semaphore;
+  crude_gfx_rhi_semaphore                                  rhi_image_avalivable_semaphores[ CRUDE_GFX_SWAPCHAIN_IMAGES_MAX_COUNT ];
+  crude_gfx_rhi_semaphore                                  rhi_rendering_finished_semaphore[ CRUDE_GFX_SWAPCHAIN_IMAGES_MAX_COUNT ];
+  crude_gfx_rhi_semaphore                                  rhi_swapchain_updated_semaphore[ CRUDE_GFX_SWAPCHAIN_IMAGES_MAX_COUNT ];
+  crude_gfx_rhi_descriptor_pool                            rhi_descriptor_pool;
+  crude_gfx_rhi_queue                                      rhi_main_queue;
+  crude_gfx_rhi_queue                                      rhi_transfer_queue;
+  bool                                                     mesh_shaders_extension_present;
+
+  /**
+   * Additional data related to the swapchain.
+   */
+  crude_gfx_rhi_image                                      rhi_swapchain_images[ CRUDE_GFX_SWAPCHAIN_IMAGES_MAX_COUNT ];
+  uint32                                                   swapchain_images_count;
+  XMFLOAT2                                                 swapchain_size;
+  uint32                                                   swapchain_image_index;
+  bool                                                     swapchain_resized_last_frame;
+  crude_gfx_render_pass_output                             swapchain_output;
+  /**
+   * Descriptor pools/sets automatically generated
+   * based on the reflection of the pipeline shaders.
+   */
+  crude_gfx_rhi_descriptor_pool                            rhi_bindless_descriptor_pool;
+  crude_gfx_descriptor_set_layout_handle                   bindless_descriptor_set_layout_handle;
+  crude_gfx_descriptor_set_handle                          bindless_descriptor_set_handle;
+
+  /**
+   * !TODO 
+   */
+  XMFLOAT2                                                 renderer_size;
+
+  crude_gfx_cmd_buffer_manager                             cmd_buffer_manager;
+  
+  crude_gfx_cmd_pool_handle                              *thread_frame_pools;
+  uint32                                                   num_threads;
+  uint32                                                   gpu_time_queries_per_frame;
+  float32                                                  gpu_timestamp_frequency;
+
+  bool                                                     timestamps_enabled;
+
+#if CRUDE_GFX_GPU_PROFILER
+  crude_gfx_gpu_time_queries_manager                      *gpu_time_queries_manager;
+#endif
+
+#if CRUDE_GFX_RAY_TRACING_ENABLED
+  crude_gfx_rhi_device_ray_tracing_pipeline_properties     ray_tracing_pipeline_properties;
+#endif /* CRUDE_GFX_RAY_TRACING_ENABLED */
+} crude_gfx_device;                                
+
+/************************************************
+ *
+ * GPU Device Initialize/Deinitialize
+ * 
+ ***********************************************/
+CRUDE_API void                                     
+crude_gfx_device_initialize                    
+(                                                  
+  _Out_ crude_gfx_device                                  *gpu,
+  _In_ crude_gfx_device_creation                          *creation
+);
+
+CRUDE_API void                                     
+crude_gfx_device_deinitialize
+(
+  _In_ crude_gfx_device                                   *gpu
+);
+
+/************************************************
+ *
+ * GPU Device Common Functions
+ * 
+ ***********************************************/  
+CRUDE_API void                                     
+crude_gfx_new_frame                                
+(                                                  
+  _In_ crude_gfx_device                                   *gpu
+);
+                                                   
+CRUDE_API void                                     
+crude_gfx_present                                  
+(                                                  
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_texture                                  *texture
+);
+                                                   
+CRUDE_API crude_gfx_cmd_buffer*                    
+crude_gfx_get_primary_cmd
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ uint32                                              thread_index,
+  _In_ bool                                                begin
+);
+
+CRUDE_API void                                     
+crude_gfx_queue_cmd
+(
+  _In_ crude_gfx_cmd_buffer                               *cmd
+);
+
+CRUDE_API void
+crude_gfx_link_texture_sampler
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_texture_handle                            texture_handle,
+  _In_ crude_gfx_sampler_handle                            sampler_handle
+);
+
+CRUDE_API crude_gfx_descriptor_set_layout_handle
+crude_gfx_get_descriptor_set_layout
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_pipeline_handle                           pipeline_handle,
+  _In_ uint32                                              layout_index
+);
+
+CRUDE_API bool
+crude_gfx_buffer_ready
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_buffer_handle                             buffer_handle
+);
+
+CRUDE_API bool
+crude_gfx_texture_ready
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_texture_handle                            texture_handle
+);
+
+CRUDE_API void
+crude_gfx_compile_shader
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ char const                                         *code,
+  _In_ uint32                                              code_size,
+  _In_ crude_gfx_rhi_shader_stage_flag_bits                stage,
+  _In_ bool                                                optimized,
+  _In_ char const                                         *name,
+  _In_ crude_heap_allocator                               *allocator,
+  _Out_ char                                             **spirv_absolute_filepath
+);
+
+CRUDE_API void
+crude_gfx_resize_framebuffer
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_framebuffer_handle                        framebuffer_handle,
+  _In_ uint32                                              width,
+  _In_ uint32                                              height
+);
+
+CRUDE_API void
+crude_gfx_resize_texture
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_texture_handle                            texture_handle,
+  _In_ uint32                                              width,
+  _In_ uint32                                              height
+);
+
+CRUDE_API void                                     
+crude_gfx_device_queue_submit
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_rhi_queue                                 rhi_queue,
+  _In_ crude_gfx_rhi_submit_info                          *submit_info,
+  _In_ crude_gfx_rhi_fence                                 rhi_fence
+);
+
+#if CRUDE_GFX_GPU_PROFILER
+CRUDE_API uint32
+crude_gfx_copy_gpu_timestamps
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _Out_ crude_gfx_gpu_time_query                          *timestamps
+);
+#endif
+
+CRUDE_API void
+crude_gfx_gpu_set_timestamps_enable
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ bool                                                value
+);
+
+CRUDE_API void                                     
+crude_gfx_generate_mipmaps
+(
+  _In_ crude_gfx_cmd_buffer                               *cmd_buffer,
+  _In_ crude_gfx_texture                                  *texture
+);
+
+CRUDE_API crude_gfx_rhi_device_address
+crude_gfx_get_buffer_device_address
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_buffer_handle                             handle
+);
+
+CRUDE_API void 
+crude_gfx_submit_immediate
+(
+  _In_ crude_gfx_cmd_buffer                               *cmd
+);
+
+CRUDE_API void
+crude_gfx_add_texture_to_update
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_texture_handle                            texture
+);
+
+CRUDE_API void
+crude_gfx_add_texture_update_commands
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_cmd_buffer                               *cmd
+);
+
+CRUDE_API crude_gfx_technique*
+crude_gfx_access_technique_by_name
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ char const                                         *technique_name
+);
+
+CRUDE_API crude_gfx_technique_pass*
+crude_gfx_access_technique_pass_by_name
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ char const                                         *technique_name,
+  _In_ char const                                         *pass_name
+);
+
+CRUDE_API void
+crude_gfx_reset_cmd_pool
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_cmd_pool_handle                           handle
+);
+
+/************************************************
+ *
+ * GPU Device Resources Functions
+ * 
+ ***********************************************/
+CRUDE_API crude_gfx_sampler_handle                     
+crude_gfx_create_sampler                           
+(                                                  
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_sampler_creation const                   *creation
+);                                                 
+                                                   
+CRUDE_API void                                     
+crude_gfx_destroy_sampler                          
+(                                                  
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_sampler_handle                            handle
+);                                                 
+                                                   
+CRUDE_API void                                     
+crude_gfx_destroy_sampler_instant                  
+(                                                  
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_sampler_handle                            handle
+);
+
+CRUDE_API crude_gfx_texture_handle                     
+crude_gfx_create_texture                           
+(                                                  
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_texture_creation const                   *creation
+);
+
+CRUDE_API void
+crude_gfx_destroy_texture
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_texture_handle                            handle
+);
+
+CRUDE_API void                                      
+crude_gfx_destroy_texture_instant                   
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_texture_handle                            handle
+);
+
+CRUDE_API crude_gfx_texture_handle                     
+crude_gfx_create_texture_view
+(                                                  
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_texture_view_creation const              *creation
+);
+
+CRUDE_API crude_gfx_shader_state_handle                 
+crude_gfx_create_shader_state                       
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_shader_state_creation const              *creation
+);
+
+CRUDE_API void                                      
+crude_gfx_destroy_shader_state                      
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_shader_state_handle                       handle
+); 
+                                                    
+CRUDE_API void                                      
+crude_gfx_destroy_shader_state_instant              
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_shader_state_handle                       handle
+);
+
+CRUDE_API crude_gfx_render_pass_handle                  
+crude_gfx_create_render_pass                        
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_render_pass_creation const               *creation
+);
+                                                       
+CRUDE_API void                                      
+crude_gfx_destroy_render_pass                       
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_render_pass_handle                        handle
+);                                                  
+
+CRUDE_API void                                      
+crude_gfx_destroy_render_pass_instant               
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_render_pass_handle                        handle
+);
+
+CRUDE_API crude_gfx_pipeline_handle                     
+crude_gfx_create_pipeline                           
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_pipeline_creation const                  *creation
+);
+
+CRUDE_API void                                      
+crude_gfx_destroy_pipeline                          
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_pipeline_handle                           handle
+);                                                  
+                                                    
+CRUDE_API void                                      
+crude_gfx_destroy_pipeline_instant                  
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_pipeline_handle                           handle
+);                             
+                                               
+CRUDE_API crude_gfx_buffer_handle                       
+crude_gfx_create_buffer                             
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_buffer_creation const                    *creation
+);
+
+CRUDE_API void                                      
+crude_gfx_destroy_buffer                            
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_buffer_handle                             handle
+);                                                  
+                                                    
+CRUDE_API void                                      
+crude_gfx_destroy_buffer_instant                    
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_buffer_handle                             handle
+);
+
+CRUDE_API crude_gfx_descriptor_set_layout_handle
+crude_gfx_create_descriptor_set_layout
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_descriptor_set_layout_creation const     *creation
+);
+
+CRUDE_API void                                      
+crude_gfx_destroy_descriptor_set_layout
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_descriptor_set_layout_handle              handle
+);
+
+CRUDE_API void
+crude_gfx_destroy_descriptor_set_layout_instant
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_descriptor_set_layout_handle              handle
+);
+
+CRUDE_API crude_gfx_descriptor_set_handle
+crude_gfx_create_descriptor_set
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_descriptor_set_creation const            *creation
+);
+
+CRUDE_API void                                      
+crude_gfx_destroy_descriptor_set
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_descriptor_set_handle                     handle
+);
+
+CRUDE_API void
+crude_gfx_destroy_descriptor_set_instant
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_descriptor_set_handle                     handle
+);
+
+CRUDE_API crude_gfx_framebuffer_handle
+crude_gfx_create_framebuffer
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_framebuffer_creation const               *creation
+);   
+
+CRUDE_API void                                      
+crude_gfx_destroy_framebuffer
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_framebuffer_handle                        handle
+);
+
+CRUDE_API void
+crude_gfx_destroy_framebuffer_instant
+(                                                   
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_framebuffer_handle                        handle
+);
+
+CRUDE_API crude_gfx_cmd_pool_handle
+crude_gfx_create_cmd_pool
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_cmd_pool_creation const                  *creation
+);
+
+CRUDE_API void
+crude_gfx_destroy_cmd_pool_instant
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_cmd_pool_handle                           handle
+);
+
+CRUDE_API crude_gfx_cmd_buffer_handle
+crude_gfx_create_cmd_buffer
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_cmd_buffer_creation const                *creation
+);
+
+CRUDE_API void
+crude_gfx_destroy_cmd_buffer_instant
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_cmd_buffer_handle                         handle
+);
+
+CRUDE_API crude_gfx_technique*
+crude_gfx_create_technique
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_technique_creation const                 *creation
+);
+
+CRUDE_API void
+crude_gfx_destroy_technique_instant
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_technique                                *technique
+);
+
+/************************************************
+ *
+ * GPU Device Resources Pools Functions
+ * 
+ ***********************************************/
+CRUDE_API crude_gfx_sampler_handle
+crude_gfx_obtain_sampler
+(
+  _In_ crude_gfx_device                                   *gpu
+);
+
+CRUDE_API crude_gfx_sampler*
+crude_gfx_access_sampler
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_sampler_handle                            handle
+);
+
+CRUDE_API void
+crude_gfx_release_sampler
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_sampler_handle                            handle
+);
+
+CRUDE_API crude_gfx_texture_handle
+crude_gfx_obtain_texture
+(
+  _In_ crude_gfx_device                                   *gpu
+);
+
+CRUDE_API crude_gfx_texture*
+crude_gfx_access_texture
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_texture_handle                            handle
+);
+
+CRUDE_API void
+crude_gfx_release_texture
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_texture_handle                            handle
+);
+
+CRUDE_API crude_gfx_render_pass_handle
+crude_gfx_obtain_render_pass
+(
+  _In_ crude_gfx_device                                   *gpu
+);
+
+CRUDE_API crude_gfx_render_pass*
+crude_gfx_access_render_pass
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_render_pass_handle                        handle
+);
+
+CRUDE_API void
+crude_gfx_release_render_pass
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_render_pass_handle                        handle
+);
+
+CRUDE_API crude_gfx_shader_state_handle
+crude_gfx_obtain_shader_state
+(
+  _In_ crude_gfx_device                                   *gpu
+);
+
+CRUDE_API crude_gfx_shader_state*
+crude_gfx_access_shader_state
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_shader_state_handle                       handle
+);
+
+CRUDE_API void
+crude_gfx_release_shader_state
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_shader_state_handle                       handle
+);
+
+CRUDE_API crude_gfx_pipeline_handle
+crude_gfx_obtain_pipeline
+(
+  _In_ crude_gfx_device                                   *gpu
+);
+
+CRUDE_API crude_gfx_pipeline*
+crude_gfx_access_pipeline
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_pipeline_handle                           handle
+);
+
+CRUDE_API void
+crude_gfx_release_pipeline
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_pipeline_handle                           handle
+);
+
+CRUDE_API crude_gfx_buffer_handle
+crude_gfx_obtain_buffer
+(
+  _In_ crude_gfx_device                                   *gpu
+);
+
+CRUDE_API crude_gfx_buffer*
+crude_gfx_access_buffer
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_buffer_handle                             handle
+);
+
+CRUDE_API void
+crude_gfx_release_buffer
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_buffer_handle                             handle
+);
+
+CRUDE_API crude_gfx_descriptor_set_layout_handle
+crude_gfx_obtain_descriptor_set_layout
+(
+  _In_ crude_gfx_device                                   *gpu
+);
+
+CRUDE_API crude_gfx_descriptor_set_layout*
+crude_gfx_access_descriptor_set_layout
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_descriptor_set_layout_handle              handle
+);
+
+CRUDE_API void
+crude_gfx_release_descriptor_set_layout
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_descriptor_set_layout_handle              handle
+);
+
+CRUDE_API crude_gfx_descriptor_set_handle
+crude_gfx_obtain_descriptor_set
+(
+  _In_ crude_gfx_device                                   *gpu
+);
+
+CRUDE_API crude_gfx_descriptor_set*
+crude_gfx_access_descriptor_set
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_descriptor_set_handle                     handle
+);
+
+CRUDE_API void
+crude_gfx_release_descriptor_set
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_descriptor_set_handle                     handle
+);
+
+CRUDE_API crude_gfx_framebuffer_handle
+crude_gfx_obtain_framebuffer
+(
+  _In_ crude_gfx_device                                   *gpu
+);
+
+CRUDE_API crude_gfx_framebuffer*
+crude_gfx_access_framebuffer
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_framebuffer_handle                        handle
+);
+
+CRUDE_API void
+crude_gfx_release_framebuffer
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_framebuffer_handle                        handle
+);
+
+CRUDE_API crude_gfx_cmd_pool*
+crude_gfx_access_cmd_pool
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_cmd_pool_handle                           handle
+);
+
+CRUDE_API crude_gfx_cmd_buffer*
+crude_gfx_access_cmd_buffer
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_cmd_buffer_handle                         handle
+);
+
+CRUDE_API crude_gfx_technique_handle
+crude_gfx_obtain_technique
+(
+  _In_ crude_gfx_device                                   *gpu
+);
+
+CRUDE_API crude_gfx_technique*
+crude_gfx_access_technique
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_technique_handle                          handle
+);
+
+CRUDE_API void
+crude_gfx_release_technique
+(
+  _In_ crude_gfx_device                                   *gpu,
+  _In_ crude_gfx_technique_handle                          handle
+);
+
+/************************************************
+ *
+ * GPU Device Utils
+ * 
+ ***********************************************/ 
+#define CRUDE_GFX_HANDLE_VULKAN_RESULT( result, ... )\
+{\
+  if ( result != VK_SUCCESS )\
+  {\
+    CRUDE_ABORT( CRUDE_CHANNEL_GRAPHICS, "vulkan result isn't success: %i %s", result, ##__VA_ARGS__ );\
+  }\
+}

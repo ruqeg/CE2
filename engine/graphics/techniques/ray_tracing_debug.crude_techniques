@@ -1,0 +1,34 @@
+{
+  "name" : "ray_tracing_debug",
+  "buffers": [
+    {
+      "name": "ray_tracing_solid",
+      "filename": "ray_tracing_solid.crude_shader",
+      "includes": [
+        "common/platform.h",
+        "common/debug.h",
+        "common/scene.h"
+      ]
+    }
+  ],
+  "pipelines" : [
+    {
+      "name" : "ray_tracing_solid",
+      "render_pass": "ray_tracing_solid_pass",
+      "shaders" : [
+        {
+          "stage" : "raygen",
+          "buffer" : "ray_tracing_solid"
+        },
+        {
+          "stage" : "closest_hit",
+          "buffer" : "ray_tracing_solid"
+        },
+        {
+          "stage" : "miss",
+          "buffer" : "ray_tracing_solid"
+        }
+      ]
+    }
+  ]
+}

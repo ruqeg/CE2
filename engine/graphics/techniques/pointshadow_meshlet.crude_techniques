@@ -1,0 +1,67 @@
+{
+  "name" : "pointshadow_meshlet",
+  "buffers": [
+    {
+      "name": "pointshadow_meshlet",
+      "filename": "pointshadow_meshlet.crude_shader",
+      "includes": [
+        "common/platform.h",
+        "common/debug.h",
+        "common/scene.h",
+        "common/culling.h",
+        "common/light.h"
+      ]
+    }
+  ],
+  "pipelines" : [
+    {
+        "name": "pointshadow_culling",
+        "shaders": [
+          {
+              "stage": "compute",
+              "buffer": "pointshadow_meshlet"
+          }
+        ]
+    },
+    {
+      "name": "pointshadow_commands_generation",
+      "shaders": [
+      {
+        "stage": "compute",
+        "buffer": "pointshadow_meshlet"
+      }
+      ]
+    },
+    {
+      "name": "pointshadow",
+      "render_pass_output": {
+        "custom": [
+          {
+            "format": "FORMAT_D32_SFLOAT",
+            "op": "clear"
+          }
+        ]
+      },
+      "depth": {
+        "write": 1,
+        "test": "less_or_equal"
+      },
+      "cull": "back",
+      "bias": {
+        "slope_factor": 1.5,
+        "constant_factor": 0.5,
+        "clamp": 0
+      },
+      "shaders": [
+        {
+          "stage": "mesh",
+          "buffer": "pointshadow_meshlet"
+        },
+        {
+          "stage": "task",
+          "buffer": "pointshadow_meshlet"
+        }
+      ]
+    }
+  ]
+}

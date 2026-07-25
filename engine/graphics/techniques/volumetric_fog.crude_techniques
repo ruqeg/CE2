@@ -1,0 +1,34 @@
+{
+  "name": "volumetric_fog",
+  "buffers": [
+    {
+      "name": "common",
+      "filename": "volumetric_fog.crude_shader",
+      "includes": [
+        "common/platform.h",
+        "common/scene.h",
+        "common/debug.h"
+      ]
+    }
+  ],
+  "pipelines": [
+    {
+      "name": "compute_inject_data",
+      "shaders": [
+        {
+          "stage": "compute",
+          "buffer": "common"
+        }
+      ]
+    },
+    {
+      "name": "noise_baking",
+      "shaders": [
+        {
+          "stage": "compute",
+          "buffer": "common"
+        }
+      ]
+    }
+  ]
+}

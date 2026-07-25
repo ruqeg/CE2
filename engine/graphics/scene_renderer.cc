@@ -1,0 +1,1750 @@
+#include <TaskScheduler_c.h>
+#include <thirdparty/cgltf/cgltf.h>
+#include <thirdparty/stb/stb_image.h>
+#include <meshoptimizer.h>
+
+#include <engine/core/time.h>
+#include <engine/core/profiler.h>
+#include <engine/core/array.h>
+#include <engine/core/file.h>
+#include <engine/core/hashmapstr.h>
+
+#include <engine/audio/audio_ecs.h>
+#include <engine/scene/scene_ecs.h>
+#include <engine/physics/physics_ecs.h>
+#include <engine/scene/scene_debug_ecs.h>
+#include <engine/graphics/shaders/common/debug.h>
+
+#include <engine/graphics/gpu_profiler.h>
+#include <engine/graphics/scene_renderer.h>
+
+/**
+ * Scene Renderer Other
+ */
+static void
+crude_gfx_scene_renderer_update_dynamic_buffers_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ crude_gfx_cmd_buffer                               *primary_cmd
+);
+
+#if CRUDE_GFX_RAY_TRACING_ENABLED
+
+#if CRUDE_GFX_VULKAN_AVAILABLE
+static void
+crude_gfx_scene_renderer_fill_top_level_acceleration_structures_instances_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ VkAccelerationStructureInstanceKHR                 *vk_acceleration_structure_instances
+);
+#endif /* CRUDE_GFX_VULKAN_AVAILABLE */
+
+static void
+crude_gfx_scene_renderer_create_top_level_acceleration_structure_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ crude_gfx_cmd_buffer                               *primary_cmd
+);
+
+static void
+crude_gfx_scene_renderer_update_top_level_acceleration_structure_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ crude_gfx_cmd_buffer                               *primary_cmd
+);
+
+static void
+crude_gfx_scene_renderer_create_acceleration_stucture_dsl_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+);
+
+static void
+crude_gfx_scene_renderer_create_acceleration_stucture_ds_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+);
+#endif
+
+/**
+ * Scene Renderer Utils
+ */
+static void
+crude_scene_renderer_register_nodes_instances_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ crude_ecs                                          *world,
+  _In_ crude_entity                                        node
+);
+
+static void
+crude_scene_renderer_update_lights_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+);
+
+/**
+ *
+ * Renderer Scene Function
+ * 
+ */
+void
+crude_gfx_scene_renderer_initialize
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ crude_gfx_scene_renderer_creation                  *creation
+)
+{
+  crude_gfx_buffer_creation                                buffer_creation;
+ 
+  CRUDE_LOG_INFO( CRUDE_CHANNEL_GRAPHICS, "Initialize scene renderer." );
+
+  /* Context */
+  scene_renderer->allocator = creation->allocator;
+  scene_renderer->temporary_allocator = creation->temporary_allocator;
+  scene_renderer->gpu = creation->async_loader->gpu;
+  scene_renderer->async_loader = creation->async_loader;
+  scene_renderer->imgui_context = creation->imgui_context;
+  scene_renderer->model_renderer_resources_manager = creation->model_renderer_resources_manager;
+  scene_renderer->imgui_pass_enalbed = creation->imgui_pass_enalbed;
+  scene_renderer->total_visible_meshes_instances_count = 0u;
+#if CRUDE_DEVELOP
+  scene_renderer->physics_shapes_manager = creation->physics_shapes_manager;
+#endif
+
+  scene_renderer->rotation_scaler = 0.001f;
+
+#if CRUDE_EDITOR
+  scene_renderer->ddgi_debug = true;
+#else
+  scene_renderer->ddgi_debug = false;
+#endif
+  scene_renderer->ddgi_enabled = false;
+  scene_renderer->ddgi_area = CRUDE_COMPOUNT_EMPTY( crude_gfx_ddgi_area_cpu );
+
+  scene_renderer->options = CRUDE_COMPOUNT_EMPTY( crude_gfx_scene_renderer_options );
+
+  scene_renderer->options.depth_pyramid_pass.depth = "depth";
+  
+  scene_renderer->options.ssr_pass.max_steps = 100;
+  scene_renderer->options.ssr_pass.max_distance = 100;
+  scene_renderer->options.ssr_pass.fade_end = 0.2;
+  scene_renderer->options.ssr_pass.fade_start = 100;
+  
+  scene_renderer->options.ssr_pass.stride_zcutoff = 0.011;
+  scene_renderer->options.ssr_pass.stride = 20;
+  scene_renderer->options.ssr_pass.z_thickness = 0.6;
+  scene_renderer->options.ssr_pass.depth_texture = "depth";
+  scene_renderer->options.ssr_pass.normal_texture = "gbuffer_normal";
+  scene_renderer->options.ssr_pass.roughness_metalness_texture = "gbuffer_roughness_metalness";
+  scene_renderer->options.ssr_pass.ssr_hit_uv_depth_rdotv_texture = "ssr_hit_uv_depth_rdotv";
+  scene_renderer->options.ssr_pass.ssr_texture = "ssr";
+  scene_renderer->options.ssr_pass.direct_radiance_texture = "direct_radiance";
+  
+#if CRUDE_GFX_COMPOSE_ENABLED
+  scene_renderer->options.compose_pass.direct_radiance_texture = "direct_radiance";
+  scene_renderer->options.compose_pass.indirect_radiance_texture = "indirect_radiance";
+  scene_renderer->options.compose_pass.radiance_texture = "radiance";
+  scene_renderer->options.compose_pass.albedo_texture = "direct_albedo";
+  scene_renderer->options.compose_pass.packed_roughness_metalness_texture = "gbuffer_roughness_metalness";
+#endif
+
+  scene_renderer->options.postprocessing_pass.hdr_pre_tonemapping = "radiance";
+  scene_renderer->options.postprocessing_pass.gamma = 2.2;
+   
+  scene_renderer->world_environment_cpu = CRUDE_COMPOUNT_EMPTY( crude_gfx_world_environment_cpu );
+
+  scene_renderer->options.indirect_light.depth_texture = "depth";
+  scene_renderer->options.indirect_light.normal_texture = "direct_normal";
+  scene_renderer->options.indirect_light.indirect_radiance_texture = "indirect_radiance";
+
+#if CRUDE_DEVELOP
+  scene_renderer->options.debug.debug_mode = CRUDE_SHADER_DEBUG_MODE_NONE;
+  scene_renderer->options.debug.flags1 = 0;
+  scene_renderer->options.debug.force_roughness = 1;
+  scene_renderer->options.debug.force_metalness = 0;
+#endif /* CRUDE_DEVELOP */
+
+  scene_renderer->total_meshes_instances_buffer_capacity = CRUDE_GFX_SCENE_RENDERER_MESH_INSTANCES_BUFFER_CAPACITY;
+  scene_renderer->total_joints_matrices_buffer_capacity = CRUDE_GFX_SCENE_RENDERER_JOINT_MATRICES_BUFFER_CAPACITY;
+  
+  CRUDE_ARRAY_INITIALIZE_WITH_CAPACITY( scene_renderer->lights, 0u, crude_heap_allocator_pack( scene_renderer->allocator ) );
+  CRUDE_ARRAY_INITIALIZE_WITH_CAPACITY( scene_renderer->culled_lights, 0u, crude_heap_allocator_pack( scene_renderer->allocator ) );
+  CRUDE_ARRAY_INITIALIZE_WITH_CAPACITY( scene_renderer->model_renderer_resoruces_instances, 0u, crude_heap_allocator_pack( scene_renderer->allocator ) );
+  CRUDE_ARRAY_INITIALIZE_WITH_CAPACITY( scene_renderer->prev_model_renderer_resoruces_instances, 0u, crude_heap_allocator_pack( scene_renderer->allocator ) );
+  
+#if CRUDE_GFX_RAY_TRACING_ENABLED
+  scene_renderer->tlas_instances_hga = crude_gfx_memory_allocation_empty( );
+  scene_renderer->tlas_scratch_hga = crude_gfx_memory_allocation_empty( );
+  scene_renderer->tlas_hga = crude_gfx_memory_allocation_empty( );
+
+  scene_renderer->acceleration_stucture_ds = CRUDE_GFX_DESCRIPTOR_SET_HANDLE_INVALID;
+  crude_gfx_scene_renderer_create_acceleration_stucture_dsl_( scene_renderer );
+#endif /* CRUDE_GFX_RAY_TRACING_ENABLED */
+  
+  scene_renderer->total_lights_hga = crude_gfx_memory_allocation_empty( );
+  scene_renderer->culled_lights_hga = crude_gfx_memory_allocation_empty( );
+  scene_renderer->culled_lights_world_to_texture_hga = crude_gfx_memory_allocation_empty( );
+  
+  scene_renderer->joint_matrices_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( XMFLOAT4X4 ) * scene_renderer->total_joints_matrices_buffer_capacity, CRUDE_GFX_MEMORY_TYPE_GPU, "joint_matrices_hga", 0 );
+
+  scene_renderer->ddgi_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( crude_gfx_ddgi_constants ), CRUDE_GFX_MEMORY_TYPE_GPU, "ddgi_hga", 0 );
+
+  scene_renderer->meshes_instances_draws_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( crude_gfx_mesh_instance_draw ) * scene_renderer->total_meshes_instances_buffer_capacity, CRUDE_GFX_MEMORY_TYPE_GPU, "meshes_instances_draws", 0 );
+  scene_renderer->scene_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( crude_gfx_scene ), CRUDE_GFX_MEMORY_TYPE_GPU, "scene", 0 );
+  scene_renderer->mesh_task_indirect_commands_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, scene_renderer->total_meshes_instances_buffer_capacity * sizeof( crude_gfx_mesh_draw_command ), CRUDE_GFX_MEMORY_TYPE_GPU, "mesh_task_indirect_commands", 0 );
+  scene_renderer->mesh_task_indirect_commands_culled_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, scene_renderer->total_meshes_instances_buffer_capacity * sizeof( crude_gfx_mesh_draw_command ), CRUDE_GFX_MEMORY_TYPE_GPU, "mesh_task_indirect_commands_culled_hga", 0 );
+  scene_renderer->mesh_task_indirect_count_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( crude_gfx_mesh_draw_count ), CRUDE_GFX_MEMORY_TYPE_GPU, "mesh_task_indirect_count_hga", 0 );
+
+  scene_renderer->debug_commands_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( crude_gfx_debug_counts ), CRUDE_GFX_MEMORY_TYPE_GPU, "debug_commands_hga", 0 );
+  scene_renderer->debug_line_vertices_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( crude_gfx_debug_line_vertex ) * CRUDE_GFX_SCENE_RENDERER_MAX_DEBUG_LINES * 2u, CRUDE_GFX_MEMORY_TYPE_GPU, "debug_line_vertices_hga", 0 );
+  scene_renderer->debug_cubes_instances_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( crude_gfx_debug_cube_instance ) * CRUDE_GFX_SCENE_RENDERER_MAX_DEBUG_CUBES, CRUDE_GFX_MEMORY_TYPE_GPU, "debug_cubes_instances_hga", 0 );
+  
+#if CRUDE_DEVELOP
+  CRUDE_ARRAY_INITIALIZE_WITH_CAPACITY( scene_renderer->debug_model_renderer_resoruces_instances, 0u, crude_heap_allocator_pack( scene_renderer->allocator ) );
+  CRUDE_ARRAY_INITIALIZE_WITH_CAPACITY( scene_renderer->debug_line_vertices_3d, 0u, crude_heap_allocator_pack( scene_renderer->allocator ) );
+
+  crude_gfx_model_renderer_resources_instance_initialize(
+    &scene_renderer->light_model_renderer_resources_instance,
+    scene_renderer->model_renderer_resources_manager,
+    crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_LIGHT_TETRAHEDRON_DEBUG_MODEL_REALTIVE_FILEPATH ) );
+  scene_renderer->light_model_renderer_resources_instance.cast_shadow = false;
+  scene_renderer->light_model_renderer_resources_instance.rtx_affected = false;
+  
+  crude_gfx_model_renderer_resources_instance_initialize(
+    &scene_renderer->camera_model_renderer_resources_instance,
+    scene_renderer->model_renderer_resources_manager,
+    crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_CAMERA_DEBUG_MODEL_REALTIVE_FILEPATH ) );
+  scene_renderer->camera_model_renderer_resources_instance.cast_shadow = false;
+  scene_renderer->camera_model_renderer_resources_instance.rtx_affected = false;
+  
+  crude_gfx_model_renderer_resources_instance_initialize(
+    &scene_renderer->capsule_model_renderer_resources_instance,
+    scene_renderer->model_renderer_resources_manager,
+    crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_CAPSULE_DEBUG_MODEL_REALTIVE_FILEPATH ) );
+  scene_renderer->capsule_model_renderer_resources_instance.cast_shadow = false;
+  scene_renderer->capsule_model_renderer_resources_instance.rtx_affected = false;
+  
+  crude_gfx_model_renderer_resources_instance_initialize(
+    &scene_renderer->physics_box_collision_model_renderer_resources_instance,
+    scene_renderer->model_renderer_resources_manager,
+    crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_PHYSICS_BOX_COLLISION_SHAPE_DEBUG_MODEL_REALTIVE_FILEPATH ) );
+  scene_renderer->physics_box_collision_model_renderer_resources_instance.cast_shadow = false;
+  scene_renderer->physics_box_collision_model_renderer_resources_instance.rtx_affected = false;
+  
+  crude_gfx_model_renderer_resources_instance_initialize(
+    &scene_renderer->audo_player_model_renderer_resources_instance,
+    scene_renderer->model_renderer_resources_manager,
+    crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_AUDIO_PLAYER_DEBUG_MODEL_REALTIVE_FILEPATH ) );
+  scene_renderer->audo_player_model_renderer_resources_instance.cast_shadow = false;
+  scene_renderer->audo_player_model_renderer_resources_instance.rtx_affected = false;
+  
+  crude_gfx_model_renderer_resources_instance_initialize(
+    &scene_renderer->audio_listener_model_renderer_resources_instance,
+    scene_renderer->model_renderer_resources_manager,
+    crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_AUDIO_LISTENER_DEBUG_MODEL_REALTIVE_FILEPATH ) );
+  scene_renderer->audio_listener_model_renderer_resources_instance.cast_shadow = false;
+  scene_renderer->audio_listener_model_renderer_resources_instance.rtx_affected = false;
+  
+  crude_gfx_model_renderer_resources_instance_initialize(
+    &scene_renderer->ray_model_renderer_resources_instance,
+    scene_renderer->model_renderer_resources_manager,
+    crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_RAY_DEBUG_MODEL_REALTIVE_FILEPATH ) );
+  scene_renderer->ray_model_renderer_resources_instance.cast_shadow = false;
+  scene_renderer->ray_model_renderer_resources_instance.rtx_affected = false;
+#endif /* CRUDE_DEVELOP */
+
+  crude_gfx_scene_renderer_on_resize( scene_renderer );
+
+  CRUDE_LOG_INFO( CRUDE_CHANNEL_GRAPHICS, "Initialize scene renderer passes." );
+
+  if ( scene_renderer->imgui_pass_enalbed )
+  {
+    crude_gfx_imgui_pass_initialize( &scene_renderer->imgui_pass, scene_renderer );
+  }
+  crude_gfx_opaque_early_pass_initialize( &scene_renderer->opaque_early_pass, scene_renderer );
+  crude_gfx_opaque_late_pass_initialize( &scene_renderer->opaque_late_pass, scene_renderer );
+  crude_gfx_depth_pyramid_pass_initialize( &scene_renderer->depth_pyramid_pass, scene_renderer );
+  crude_gfx_pointlight_shadow_pass_initialize( &scene_renderer->pointlight_shadow_pass, scene_renderer );
+  crude_gfx_culling_early_pass_initialize( &scene_renderer->culling_early_pass, scene_renderer );
+  crude_gfx_culling_late_pass_initialize( &scene_renderer->culling_late_pass, scene_renderer );
+  crude_gfx_debug_pass_initialize( &scene_renderer->debug_pass, scene_renderer );
+#if CRUDE_GFX_COMPOSE_ENABLED
+  crude_gfx_compose_pass_initialize( &scene_renderer->compose_pass, scene_renderer );
+#endif
+  crude_gfx_postprocessing_pass_initialize( &scene_renderer->postprocessing_pass, scene_renderer );
+  crude_gfx_translucent_pass_initialize( &scene_renderer->translucent_pass, scene_renderer );
+  crude_gfx_opaque_terrain_pass_initialize( &scene_renderer->opaque_terrain_pass, scene_renderer );
+  crude_gfx_light_lut_pass_initialize( &scene_renderer->light_lut_pass, scene_renderer );
+  crude_gfx_volumetric_fog_pass_initialize( &scene_renderer->volumetric_fog_pass, scene_renderer );
+  //crude_gfx_ssr_pass_initialize( &scene_renderer->ssr_pass, scene_renderer );
+#if CRUDE_GFX_RAY_TRACING_SOLID_DEBUG_ENABLED
+  crude_gfx_ray_tracing_solid_pass_initialize( &scene_renderer->ray_tracing_solid_pass, scene_renderer );
+#endif
+#if CRUDE_GFX_RAY_TRACING_DDGI_ENABLED
+  crude_gfx_indirect_light_pass_initialize( &scene_renderer->indirect_light_pass, scene_renderer );
+  crude_gfx_indirect_light_debug_pass_initialize( &scene_renderer->indirect_light_debug_pass, scene_renderer );
+#endif
+}
+
+void
+crude_gfx_scene_renderer_deinitialize
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+)
+{
+  crude_gfx_render_graph_builder_unregister_all_render_passes( scene_renderer->render_graph->builder );
+#if CRUDE_GFX_RAY_TRACING_SOLID_DEBUG_ENABLED
+  crude_gfx_render_graph_builder_unregister_render_pass( scene_renderer->render_graph->builder, "ray_tracing_solid_pass" );
+#endif
+#if CRUDE_GFX_RAY_TRACING_DDGI_ENABLED
+  crude_gfx_render_graph_builder_unregister_render_pass( scene_renderer->render_graph->builder, "indirect_light_pass" );
+  crude_gfx_render_graph_builder_unregister_render_pass( scene_renderer->render_graph->builder, "indirect_light_debug_pass" );
+#endif
+  
+  if ( scene_renderer->imgui_pass_enalbed )
+  {
+    crude_gfx_imgui_pass_deinitialize( &scene_renderer->imgui_pass );
+  }
+  crude_gfx_opaque_early_pass_deinitialize( &scene_renderer->opaque_early_pass );
+  crude_gfx_opaque_late_pass_deinitialize( &scene_renderer->opaque_late_pass );
+  crude_gfx_depth_pyramid_pass_deinitialize( &scene_renderer->depth_pyramid_pass );
+  crude_gfx_pointlight_shadow_pass_deinitialize( &scene_renderer->pointlight_shadow_pass );
+  crude_gfx_culling_early_pass_deinitialize( &scene_renderer->culling_early_pass );
+  crude_gfx_culling_late_pass_deinitialize( &scene_renderer->culling_late_pass );
+  crude_gfx_debug_pass_deinitialize( &scene_renderer->debug_pass );
+#if CRUDE_GFX_COMPOSE_ENABLED
+  crude_gfx_compose_pass_deinitialize( &scene_renderer->compose_pass );
+#endif
+  crude_gfx_postprocessing_pass_deinitialize( &scene_renderer->postprocessing_pass );
+  crude_gfx_opaque_terrain_pass_deinitialize( &scene_renderer->opaque_terrain_pass );
+  crude_gfx_translucent_pass_deinitialize( &scene_renderer->translucent_pass );
+  crude_gfx_light_lut_pass_deinitialize( &scene_renderer->light_lut_pass );
+  //crude_gfx_ssr_pass_deinitialize( &scene_renderer->ssr_pass );
+  crude_gfx_volumetric_fog_pass_deinitialize( &scene_renderer->volumetric_fog_pass );
+  
+#if CRUDE_GFX_RAY_TRACING_SOLID_DEBUG_ENABLED
+  crude_gfx_ray_tracing_solid_pass_deinitialize( &scene_renderer->ray_tracing_solid_pass );
+#endif
+
+#if CRUDE_GFX_RAY_TRACING_DDGI_ENABLED
+  crude_gfx_indirect_light_pass_deinitialize( &scene_renderer->indirect_light_pass );
+  crude_gfx_indirect_light_debug_pass_deinitialize( &scene_renderer->indirect_light_debug_pass );
+#endif
+  
+#if CRUDE_DEVELOP
+  crude_gfx_model_renderer_resources_instance_deinitialize( &scene_renderer->light_model_renderer_resources_instance );
+  crude_gfx_model_renderer_resources_instance_deinitialize( &scene_renderer->camera_model_renderer_resources_instance );
+  crude_gfx_model_renderer_resources_instance_deinitialize( &scene_renderer->capsule_model_renderer_resources_instance );
+  crude_gfx_model_renderer_resources_instance_deinitialize( &scene_renderer->physics_box_collision_model_renderer_resources_instance );
+  crude_gfx_model_renderer_resources_instance_deinitialize( &scene_renderer->audio_listener_model_renderer_resources_instance );
+  crude_gfx_model_renderer_resources_instance_deinitialize( &scene_renderer->audo_player_model_renderer_resources_instance );
+  crude_gfx_model_renderer_resources_instance_deinitialize( &scene_renderer->ray_model_renderer_resources_instance );
+
+  CRUDE_ARRAY_DEINITIALIZE( scene_renderer->debug_model_renderer_resoruces_instances );
+  CRUDE_ARRAY_DEINITIALIZE( scene_renderer->debug_line_vertices_3d );
+#endif /* CRUDE_DEVELOP */
+
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->ddgi_hga );
+  
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->total_lights_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->culled_lights_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->culled_lights_world_to_texture_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->scene_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->meshes_instances_draws_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->mesh_task_indirect_commands_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->mesh_task_indirect_commands_culled_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->mesh_task_indirect_count_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->debug_commands_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->debug_cubes_instances_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->debug_line_vertices_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->joint_matrices_hga );
+  
+#if CRUDE_GFX_RAY_TRACING_ENABLED
+  crude_gfx_rhi_destroy_acceleration_structure( &scene_renderer->gpu->rhi_device, scene_renderer->rhi_tlas );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->tlas_instances_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->tlas_scratch_hga );
+  crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->tlas_hga );
+
+  crude_gfx_destroy_descriptor_set( scene_renderer->gpu, scene_renderer->acceleration_stucture_ds );
+  crude_gfx_destroy_descriptor_set_layout( scene_renderer->gpu, scene_renderer->acceleration_stucture_dsl );
+#endif /* CRUDE_GFX_RAY_TRACING_ENABLED */
+
+  CRUDE_ARRAY_DEINITIALIZE( scene_renderer->prev_model_renderer_resoruces_instances );
+  CRUDE_ARRAY_DEINITIALIZE( scene_renderer->model_renderer_resoruces_instances );
+  CRUDE_ARRAY_DEINITIALIZE( scene_renderer->lights );
+  CRUDE_ARRAY_DEINITIALIZE( scene_renderer->culled_lights );
+
+}
+
+bool
+crude_gfx_scene_renderer_update_instances_from_node
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ crude_ecs                                          *world,
+  _In_ crude_entity                                        main_node
+)
+{
+  bool                                                     should_recreated_tlas, ddgi_enabled_prev, buffers_recrteated, model_initialized;
+ 
+  CRUDE_PROFILER_ZONE_NAME( "crude_gfx_scene_renderer_update_instances_from_node" );
+
+  model_initialized = false;
+
+#if CRUDE_DEVELOP
+  /* load debug models in case it was cleaned (look at the model manager resource clean) */
+  scene_renderer->light_model_renderer_resources_instance.model_renderer_resources_handle = crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_LIGHT_TETRAHEDRON_DEBUG_MODEL_REALTIVE_FILEPATH );
+  scene_renderer->camera_model_renderer_resources_instance.model_renderer_resources_handle = crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_CAMERA_DEBUG_MODEL_REALTIVE_FILEPATH );
+  scene_renderer->capsule_model_renderer_resources_instance.model_renderer_resources_handle = crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_CAPSULE_DEBUG_MODEL_REALTIVE_FILEPATH );
+  scene_renderer->physics_box_collision_model_renderer_resources_instance.model_renderer_resources_handle = crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_PHYSICS_BOX_COLLISION_SHAPE_DEBUG_MODEL_REALTIVE_FILEPATH );
+  scene_renderer->audo_player_model_renderer_resources_instance.model_renderer_resources_handle = crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_AUDIO_PLAYER_DEBUG_MODEL_REALTIVE_FILEPATH );
+  scene_renderer->audio_listener_model_renderer_resources_instance.model_renderer_resources_handle = crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_AUDIO_LISTENER_DEBUG_MODEL_REALTIVE_FILEPATH );
+  scene_renderer->ray_model_renderer_resources_instance.model_renderer_resources_handle = crude_gfx_model_renderer_resources_manager_get_gltf_model( scene_renderer->model_renderer_resources_manager, CRUDE_RAY_DEBUG_MODEL_REALTIVE_FILEPATH );
+#endif /* CRUDE_DEVELOP */
+  
+  CRUDE_SWAP( scene_renderer->model_renderer_resoruces_instances, scene_renderer->prev_model_renderer_resoruces_instances );
+  
+  CRUDE_ARRAY_SET_LENGTH( scene_renderer->model_renderer_resoruces_instances, 0u );
+  CRUDE_ARRAY_SET_LENGTH( scene_renderer->lights, 0u );
+  CRUDE_ARRAY_SET_LENGTH( scene_renderer->culled_lights, 0u );
+  
+  ddgi_enabled_prev = scene_renderer->ddgi_enabled;
+
+  scene_renderer->ddgi_enabled = false;
+
+  scene_renderer->prev_ddgi_area = scene_renderer->ddgi_area;
+  
+  scene_renderer->world_environment_cpu = CRUDE_COMPOUNT_EMPTY( crude_gfx_world_environment_cpu );
+  scene_renderer->world_environment_cpu.ambient_radiance.x = 1;
+  scene_renderer->world_environment_cpu.ambient_radiance.y = 1;
+  scene_renderer->world_environment_cpu.ambient_radiance.z = 1;
+
+  for ( uint32 i = 0; i < CRUDE_ARRAY_LENGTH( scene_renderer->debug_model_renderer_resoruces_instances ); ++i )
+  {
+    CRUDE_ARRAY_PUSH( scene_renderer->model_renderer_resoruces_instances, scene_renderer->debug_model_renderer_resoruces_instances[ i ] );
+  }
+
+  crude_scene_renderer_register_nodes_instances_( scene_renderer, world, main_node );
+
+  bool probes_count_changed = scene_renderer->ddgi_area.probe_count.x != scene_renderer->prev_ddgi_area.probe_count.x
+    || scene_renderer->ddgi_area.probe_count.y != scene_renderer->prev_ddgi_area.probe_count.y 
+    || scene_renderer->ddgi_area.probe_count.z != scene_renderer->prev_ddgi_area.probe_count.z;
+
+  bool probes_spaching_changed = scene_renderer->ddgi_area.probe_spacing.x != scene_renderer->prev_ddgi_area.probe_spacing.x
+    || scene_renderer->ddgi_area.probe_spacing.y != scene_renderer->prev_ddgi_area.probe_spacing.y 
+    || scene_renderer->ddgi_area.probe_spacing.z != scene_renderer->prev_ddgi_area.probe_spacing.z;
+
+  bool probes_grid_changed = scene_renderer->ddgi_area.probe_grid_position.x != scene_renderer->prev_ddgi_area.probe_grid_position.x
+    || scene_renderer->ddgi_area.probe_grid_position.y != scene_renderer->prev_ddgi_area.probe_grid_position.y 
+    || scene_renderer->ddgi_area.probe_grid_position.z != scene_renderer->prev_ddgi_area.probe_grid_position.z;
+
+  bool offsets_reseted = false;
+  offsets_reseted |= scene_renderer->ddgi_area.max_probe_offset != scene_renderer->prev_ddgi_area.max_probe_offset;
+  offsets_reseted |= scene_renderer->ddgi_area.offsets_calculations_count != scene_renderer->prev_ddgi_area.offsets_calculations_count;
+  offsets_reseted |= probes_count_changed;
+  offsets_reseted |= probes_spaching_changed;
+  offsets_reseted |= probes_grid_changed;
+  offsets_reseted |= !ddgi_enabled_prev && scene_renderer->ddgi_enabled;
+  if ( offsets_reseted )
+  {
+    crude_gfx_indirect_light_pass_on_offsets_reset( &scene_renderer->indirect_light_pass );
+  }
+
+  if ( probes_count_changed )
+  {
+    crude_gfx_indirect_light_pass_on_ddgi_area_resized( &scene_renderer->indirect_light_pass );
+  }
+
+  if ( ddgi_enabled_prev && !scene_renderer->ddgi_enabled )
+  {
+    crude_gfx_indirect_light_pass_on_disabled( &scene_renderer->indirect_light_pass );
+  }
+
+  should_recreated_tlas = false;
+
+  if ( CRUDE_ARRAY_LENGTH( scene_renderer->prev_model_renderer_resoruces_instances ) != CRUDE_ARRAY_LENGTH( scene_renderer->model_renderer_resoruces_instances ) )
+  {
+    should_recreated_tlas = true;
+  }
+  else
+  {
+    for ( uint32 i = 0; i < CRUDE_ARRAY_LENGTH( scene_renderer->prev_model_renderer_resoruces_instances ); ++i )
+    {
+      if ( scene_renderer->prev_model_renderer_resoruces_instances[ i ].unique_id != scene_renderer->model_renderer_resoruces_instances[ i ].unique_id )
+      {
+        should_recreated_tlas = true;
+      }
+    }
+  }
+
+  scene_renderer->total_meshes_instances_count = 0u;
+  scene_renderer->total_joints_matrices_count = 1u; /* reserve default matrix */
+  
+  for ( uint32 i = 0; i < CRUDE_ARRAY_LENGTH( scene_renderer->model_renderer_resoruces_instances ); ++i )
+  {
+    crude_gfx_model_renderer_resources const              *model_renderer_resources;
+    
+    model_renderer_resources = crude_gfx_model_renderer_resources_manager_access_model_renderer_resources( scene_renderer->model_renderer_resources_manager, scene_renderer->model_renderer_resoruces_instances[ i ].model_renderer_resources_handle );
+    
+    for ( uint32 node_index = 0; node_index < CRUDE_ARRAY_LENGTH( model_renderer_resources->nodes ); ++node_index )
+    {
+      crude_gfx_node                                      *node;
+
+      node = &model_renderer_resources->nodes[ node_index ];
+
+      if ( node->meshes )
+      {
+        scene_renderer->total_meshes_instances_count += CRUDE_ARRAY_LENGTH( node->meshes );
+      }
+
+      if ( node->skin != -1 )
+      {
+        crude_gfx_skin                                    *skin;
+
+        skin = &model_renderer_resources->skins[ node->skin ];
+        scene_renderer->total_joints_matrices_count += CRUDE_ARRAY_LENGTH( skin->joints );
+      }
+    }
+  }
+
+  buffers_recrteated = should_recreated_tlas;
+  
+#if CRUDE_GFX_RAY_TRACING_ENABLED
+  if ( should_recreated_tlas ) 
+  {
+    if ( scene_renderer->tlas_hga.gpu_address )
+    {
+      crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->tlas_hga );
+      crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->tlas_instances_hga );
+      crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->tlas_scratch_hga );
+      crude_gfx_rhi_destroy_acceleration_structure( &scene_renderer->gpu->rhi_device, scene_renderer->rhi_tlas );
+    }
+
+    crude_gfx_cmd_buffer *cmd = crude_gfx_access_cmd_buffer( scene_renderer->gpu, scene_renderer->gpu->immediate_transfer_cmd_buffer );
+    crude_gfx_cmd_begin_primary( cmd );
+    crude_gfx_scene_renderer_create_top_level_acceleration_structure_( scene_renderer, cmd );
+    crude_gfx_submit_immediate( cmd );
+
+    crude_gfx_scene_renderer_create_acceleration_stucture_ds_( scene_renderer );
+  }
+#endif /* CRUDE_GFX_RAY_TRACING_ENABLED */
+
+  if ( scene_renderer->total_joints_matrices_count > scene_renderer->total_joints_matrices_buffer_capacity )
+  {
+    scene_renderer->total_joints_matrices_buffer_capacity = 4 * scene_renderer->total_joints_matrices_count; 
+
+    if ( crude_gfx_memory_allocation_valid( &scene_renderer->joint_matrices_hga ) )
+    {
+      crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->joint_matrices_hga );
+    }
+
+    scene_renderer->joint_matrices_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( XMFLOAT4X4 ) * scene_renderer->total_joints_matrices_buffer_capacity, CRUDE_GFX_MEMORY_TYPE_GPU, "joint_matrices_hga", 0 );
+
+    buffers_recrteated = true;
+  }
+  
+  if ( 2.f * scene_renderer->total_meshes_instances_count > scene_renderer->total_meshes_instances_buffer_capacity )
+  {
+    scene_renderer->total_meshes_instances_buffer_capacity = 4 * scene_renderer->total_meshes_instances_count; /* we need at least 2x because of transparency objects, so do 4x for extensions idk */
+
+    if ( crude_gfx_memory_allocation_valid( &scene_renderer->meshes_instances_draws_hga ) )
+    {
+      crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->meshes_instances_draws_hga );
+    }
+    
+    if ( crude_gfx_memory_allocation_valid( &scene_renderer->mesh_task_indirect_commands_hga ) )
+    {
+      crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->mesh_task_indirect_commands_hga );
+    }
+    
+    if ( crude_gfx_memory_allocation_valid( &scene_renderer->mesh_task_indirect_commands_culled_hga ) )
+    {
+      crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->mesh_task_indirect_commands_culled_hga );
+    }
+
+    scene_renderer->meshes_instances_draws_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( crude_gfx_mesh_instance_draw ) * scene_renderer->total_meshes_instances_buffer_capacity, CRUDE_GFX_MEMORY_TYPE_GPU, "meshes_instances_draws", 0 );
+    scene_renderer->mesh_task_indirect_commands_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, scene_renderer->total_meshes_instances_buffer_capacity * sizeof( crude_gfx_mesh_draw_command ), CRUDE_GFX_MEMORY_TYPE_GPU, "mesh_task_indirect_commands", 0 );
+    scene_renderer->mesh_task_indirect_commands_culled_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, scene_renderer->total_meshes_instances_buffer_capacity * sizeof( crude_gfx_mesh_draw_command ), CRUDE_GFX_MEMORY_TYPE_GPU, "mesh_task_indirect_commands_culled_hga", 0 );
+
+    buffers_recrteated = true;
+  }
+  
+  CRUDE_PROFILER_ZONE_END;
+  return buffers_recrteated | model_initialized;
+}
+
+void
+crude_gfx_scene_renderer_rebuild_light_gpu_buffers
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+)
+{
+  CRUDE_LOG_INFO( CRUDE_CHANNEL_GRAPHICS, "Rebuild light GPU buffers" );
+
+  if ( crude_gfx_memory_allocation_valid( &scene_renderer->total_lights_hga ) )
+  {
+    crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->total_lights_hga );
+  }
+
+  if ( crude_gfx_memory_allocation_valid( &scene_renderer->culled_lights_hga ) )
+  {
+    crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->culled_lights_hga );
+  }
+  
+  if ( crude_gfx_memory_allocation_valid( &scene_renderer->culled_lights_world_to_texture_hga ) )
+  {
+    crude_gfx_memory_deallocate( scene_renderer->gpu, scene_renderer->culled_lights_world_to_texture_hga );
+  }
+
+  scene_renderer->total_lights_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( crude_gfx_light ) * CRUDE_LIGHTS_MAX_COUNT, CRUDE_GFX_MEMORY_TYPE_GPU, "total_lights_hga", 0 );
+  scene_renderer->culled_lights_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( crude_gfx_light ) * CRUDE_LIGHTS_MAX_COUNT, CRUDE_GFX_MEMORY_TYPE_GPU, "culled_lights_hga", 0 );
+  scene_renderer->culled_lights_world_to_texture_hga = crude_gfx_memory_allocate_with_pname( scene_renderer->gpu, sizeof( XMFLOAT4X4 ) * CRUDE_LIGHTS_MAX_COUNT * 4u, CRUDE_GFX_MEMORY_TYPE_GPU, "lights_world_to_texture_hga", 0 );
+}
+
+void
+crude_gfx_scene_renderer_start_frame
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+)
+{
+  scene_renderer->primary_cmd = crude_gfx_get_primary_cmd( scene_renderer->gpu, 0, true );
+}
+
+void
+crude_gfx_scene_renderer_update_dynamic_buffers
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+)
+{
+  CRUDE_PROFILER_ZONE_NAME( "crude_gfx_scene_renderer_update_dynamic_buffers" );
+  crude_gfx_cmd_push_marker( scene_renderer->primary_cmd, "crude_gfx_scene_renderer_update_dynamic_buffers" );
+  crude_scene_renderer_update_lights_( scene_renderer );
+  crude_gfx_scene_renderer_update_dynamic_buffers_( scene_renderer, scene_renderer->primary_cmd );
+  crude_gfx_cmd_pop_marker( scene_renderer->primary_cmd );
+  CRUDE_PROFILER_ZONE_END;
+}
+
+void
+crude_gfx_scene_renderer_render
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+)
+{
+  CRUDE_PROFILER_ZONE_NAME( "crude_gfx_scene_renderer_render" );
+  crude_gfx_cmd_push_marker( scene_renderer->primary_cmd, "crude_gfx_scene_renderer_render" );
+  crude_gfx_render_graph_render( scene_renderer->render_graph, scene_renderer->primary_cmd );
+  crude_gfx_cmd_pop_marker( scene_renderer->primary_cmd );
+  CRUDE_PROFILER_ZONE_END;
+}
+
+void
+crude_gfx_scene_renderer_queue
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+)
+{
+  CRUDE_PROFILER_ZONE_NAME( "crude_gfx_scene_renderer_queue" );
+  crude_gfx_cmd_push_marker( scene_renderer->primary_cmd, "crude_gfx_scene_renderer_queue" );
+  crude_gfx_queue_cmd( scene_renderer->primary_cmd );
+  crude_gfx_cmd_pop_marker( scene_renderer->primary_cmd );
+  CRUDE_PROFILER_ZONE_END;
+}
+
+void
+crude_gfx_scene_renderer_register_passes
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ crude_gfx_render_graph                             *render_graph
+)
+{
+  CRUDE_LOG_INFO( CRUDE_CHANNEL_GRAPHICS, "Register scene renderer passes." );
+
+  scene_renderer->render_graph = render_graph;
+  
+  if ( scene_renderer->imgui_pass_enalbed )
+  {
+#if CRUDE_EDITOR
+    crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "imgui_editor_pass" ), crude_gfx_imgui_pass_pack( &scene_renderer->imgui_pass ) );
+#else
+    crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "imgui_game_pass" ), crude_gfx_imgui_pass_pack( &scene_renderer->imgui_pass ) );
+#endif
+  }
+
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "opaque_early_pass" ), crude_gfx_opaque_early_pass_pack( &scene_renderer->opaque_early_pass ) );
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "opaque_late_pass" ), crude_gfx_opaque_late_pass_pack( &scene_renderer->opaque_late_pass ) );
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "depth_pyramid_early_pass" ), crude_gfx_depth_pyramid_pass_pack( &scene_renderer->depth_pyramid_pass ) );
+  //crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "depth_pyramid_late_pass" ), crude_gfx_depth_pyramid_pass_pack( &scene_renderer->depth_pyramid_pass ) );
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "culling_early_pass" ), crude_gfx_culling_early_pass_pack( &scene_renderer->culling_early_pass ) );
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "culling_late_pass" ), crude_gfx_culling_late_pass_pack( &scene_renderer->culling_late_pass ) );
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "debug_pass" ), crude_gfx_debug_pass_pack( &scene_renderer->debug_pass ) );
+#if CRUDE_GFX_COMPOSE_ENABLED
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "compose_pass" ), crude_gfx_compose_pass_pack( &scene_renderer->compose_pass ) );
+#endif
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "postprocessing_pass" ), crude_gfx_postprocessing_pass_pack( &scene_renderer->postprocessing_pass ) );
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "translucent_pass" ), crude_gfx_translucent_pass_pack( &scene_renderer->translucent_pass ) );
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "opaque_terrain_pass" ), crude_gfx_opaque_terrain_pass_pack( &scene_renderer->opaque_terrain_pass ) );
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "light_lut_pass" ), crude_gfx_light_lut_pass_pack( &scene_renderer->light_lut_pass ) );
+  //crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "ssr_pass" ), crude_gfx_ssr_pass_pack( &scene_renderer->ssr_pass ) );
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "volumetric_fog_pass" ), crude_gfx_volumetric_fog_pass_pack( &scene_renderer->volumetric_fog_pass ) );
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "pointlight_shadows_pass" ), crude_gfx_pointlight_shadow_pass_pack( &scene_renderer->pointlight_shadow_pass ) );
+#if CRUDE_GFX_RAY_TRACING_SOLID_DEBUG_ENABLED
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "ray_tracing_solid_pass" ), crude_gfx_ray_tracing_solid_pass_pack( &scene_renderer->ray_tracing_solid_pass ) );
+#endif
+
+#if CRUDE_GFX_RAY_TRACING_DDGI_ENABLED
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "indirect_light_pass" ), crude_gfx_indirect_light_pass_pack( &scene_renderer->indirect_light_pass ) );
+  crude_gfx_render_graph_builder_register_render_pass( render_graph->builder, CRUDE_STRING_NODE( "indirect_light_debug_pass" ), crude_gfx_indirect_light_debug_pass_pack( &scene_renderer->indirect_light_debug_pass ) );
+  crude_gfx_indirect_light_pass_on_disabled( &scene_renderer->indirect_light_pass );
+#endif
+}
+
+void
+crude_gfx_scene_renderer_on_resize
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+)
+{
+  CRUDE_PROFILER_ZONE_NAME( "crude_gfx_scene_renderer_on_resize" );
+
+  CRUDE_PROFILER_ZONE_END;
+}
+
+#if CRUDE_DEVELOP
+void
+crude_gfx_scene_renderer_debug_queue_clear
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+)
+{
+  CRUDE_ARRAY_SET_LENGTH( scene_renderer->debug_model_renderer_resoruces_instances, 0 );
+  CRUDE_ARRAY_SET_LENGTH( scene_renderer->debug_line_vertices_3d, 0 );
+}
+
+void
+crude_gfx_scene_renderer_debug_queue_draw_line3d
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ XMVECTOR                                            start,
+  _In_ XMVECTOR                                            end,
+  _In_ XMVECTOR                                            color
+)
+{
+  crude_gfx_debug_line_vertex                              vertex_start, vertex_end;
+
+  if ( !scene_renderer->options.debug.show_debug_gltf )
+  {
+    return;
+  }
+  
+  XMStoreFloat3( &vertex_start.position, start );
+  vertex_start.color = crude_color_set( XMVectorGetX( color ), XMVectorGetY( color ), XMVectorGetZ( color ), XMVectorGetW( color ) );
+  
+  XMStoreFloat3( &vertex_end.position, end );
+  vertex_end.color = crude_color_set( XMVectorGetX( color ), XMVectorGetY( color ), XMVectorGetZ( color ), XMVectorGetW( color ) );
+
+  CRUDE_ARRAY_PUSH( scene_renderer->debug_line_vertices_3d, vertex_start );
+  CRUDE_ARRAY_PUSH( scene_renderer->debug_line_vertices_3d, vertex_end );
+}
+
+void
+crude_gfx_scene_renderer_debug_queue_draw_capsule
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ XMMATRIX                                            model_to_world,
+	_In_ float32                                             height,
+	_In_ float32                                             radius
+)
+{
+  XMMATRIX                                                 model_to_custom_model;
+
+  if ( !scene_renderer->options.debug.show_debug_gltf )
+  {
+    return;
+  }
+
+  model_to_custom_model = XMMatrixTranslation( 0.f, height, 0.f );
+  model_to_custom_model = XMMatrixMultiply( XMMatrixScaling( radius, height, radius ), model_to_custom_model );
+  XMStoreFloat4x4( &scene_renderer->capsule_model_renderer_resources_instance.model_to_world, XMMatrixMultiply( model_to_custom_model, model_to_world ) );
+  CRUDE_ARRAY_PUSH( scene_renderer->debug_model_renderer_resoruces_instances, scene_renderer->capsule_model_renderer_resources_instance );
+}
+#endif /* CRUDE_DEVELOP */
+
+/**
+ * Scene Renderer Other
+ */
+static void
+crude_gfx_scene_renderer_update_dynamic_buffers_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ crude_gfx_cmd_buffer                               *primary_cmd
+)
+{
+  crude_gfx_device                                        *gpu;
+
+  crude_gfx_cmd_push_marker( primary_cmd, "crude_gfx_scene_renderer_update_dynamic_buffers_" );
+
+  gpu = scene_renderer->gpu;
+  
+  /* Update ddgi constant buffer */
+  {
+    crude_gfx_ddgi_constants                              *ddgi_constants;
+    crude_gfx_indirect_light_pass                         *pass;
+    crude_gfx_memory_allocation                            ddgi_constants_tca;
+    
+    pass = &scene_renderer->indirect_light_pass;
+
+    ddgi_constants_tca = crude_gfx_linear_allocator_allocate( &gpu->frame_linear_allocator, sizeof( crude_gfx_ddgi_constants ) );
+    ddgi_constants = CRUDE_CAST( crude_gfx_ddgi_constants*, ddgi_constants_tca.cpu_address );
+    
+    *ddgi_constants = CRUDE_COMPOUNT_EMPTY( crude_gfx_ddgi_constants );
+    ddgi_constants->probe_counts.x = scene_renderer->ddgi_area.probe_count.x;
+    ddgi_constants->probe_counts.y = scene_renderer->ddgi_area.probe_count.y;
+    ddgi_constants->probe_counts.z = scene_renderer->ddgi_area.probe_count.z;
+    ddgi_constants->probe_rays = scene_renderer->ddgi_area.probe_rays;
+    ddgi_constants->radiance_output_index = pass->probe_raytrace_radiance_texture_handle.index;
+    ddgi_constants->indirect_output_index = CRUDE_GFX_PASS_TEXTURE_INDEX( indirect_light.indirect_radiance_texture );
+    ddgi_constants->depth_fullscreen_texture_index = CRUDE_GFX_PASS_TEXTURE_INDEX( indirect_light.depth_texture );
+    ddgi_constants->normal_texture_index = CRUDE_GFX_PASS_TEXTURE_INDEX( indirect_light.normal_texture );
+    ddgi_constants->grid_irradiance_output_index = pass->probe_grid_irradiance_texture_handle.index;
+    ddgi_constants->grid_visibility_texture_index = pass->probe_grid_visibility_texture_handle.index;
+    ddgi_constants->probe_offset_texture_index = pass->probe_offsets_texture_handle.index;
+    XMStoreFloat4x4( &ddgi_constants->random_rotation, XMMatrixRotationRollPitchYaw( scene_renderer->rotation_scaler * crude_random_unit_f32( ), scene_renderer->rotation_scaler * crude_random_unit_f32( ), scene_renderer->rotation_scaler * crude_random_unit_f32( ) ) );
+    //XMStoreFloat4x4( &ddgi_mapped_data->random_rotation, XMMatrixRotationAxis( XMVector3Normalize( XMVectorSet( crude_random_unit_f32( ), crude_random_unit_f32( ), crude_random_unit_f32( ), 1.0 ) ), crude_random_unit_f32( ) * XM_2PI ) );//get_random_value( -1,1 ) * rotation_scaler, get_random_value( -1,1 ) * rotation_scaler, get_random_value( -1,1 ) * rotation_scaler ) );
+    ddgi_constants->irradiance_texture_width = pass->irradiance_atlas_width;
+    ddgi_constants->irradiance_texture_height = pass->irradiance_atlas_height;
+    ddgi_constants->irradiance_side_length = pass->irradiance_side_length;
+    ddgi_constants->visibility_texture_width = pass->visibility_atlas_width;
+    ddgi_constants->visibility_texture_height = pass->visibility_atlas_height;
+    ddgi_constants->visibility_side_length = pass->visibility_side_length;
+    ddgi_constants->hysteresis = scene_renderer->ddgi_area.hysteresis;
+    ddgi_constants->self_shadow_bias = scene_renderer->ddgi_area.self_shadow_bias;
+    ddgi_constants->probe_grid_position = scene_renderer->ddgi_area.probe_grid_position;
+    ddgi_constants->max_probe_offset = scene_renderer->ddgi_area.max_probe_offset;
+    ddgi_constants->infinite_bounces_multiplier = scene_renderer->ddgi_area.infinite_bounces_multiplier;
+    ddgi_constants->probe_spacing = scene_renderer->ddgi_area.probe_spacing;
+    ddgi_constants->probe_update_per_frame = scene_renderer->ddgi_area.probe_update_per_frame;
+    ddgi_constants->reciprocal_probe_spacing = CRUDE_COMPOUNT( XMFLOAT3, {
+      1.f / scene_renderer->ddgi_area.probe_spacing.x,
+      1.f / scene_renderer->ddgi_area.probe_spacing.y,
+      1.f / scene_renderer->ddgi_area.probe_spacing.z } );
+    ddgi_constants->shadow_weight_power = scene_renderer->ddgi_area.shadow_weight_power;
+    ddgi_constants->probe_update_offset = pass->probe_update_offset;
+  
+    crude_gfx_cmd_memory_copy( primary_cmd, ddgi_constants_tca, scene_renderer->ddgi_hga, 0, 0 );
+  }
+
+  /* Update scene constant buffer*/
+  {
+    crude_gfx_scene                                       *scene;
+    crude_gfx_indirect_light_pass                         *pass;
+    crude_gfx_memory_allocation                            scene_tca;
+    
+    pass = &scene_renderer->indirect_light_pass;
+
+    scene_tca = crude_gfx_linear_allocator_allocate( &gpu->frame_linear_allocator, sizeof( crude_gfx_scene ) );
+    scene = CRUDE_CAST( crude_gfx_scene*, scene_tca.cpu_address );
+
+    *scene = CRUDE_COMPOUNT_EMPTY( crude_gfx_scene );
+    scene->flags = 0u;
+    scene->camera_previous = scene->camera;
+    scene->resolution.x = scene_renderer->gpu->renderer_size.x;
+    scene->resolution.y = scene_renderer->gpu->renderer_size.y;
+    scene->resolution_ratio = CRUDE_CAST( float32, scene_renderer->gpu->renderer_size.x ) / scene_renderer->gpu->renderer_size.y;
+    crude_gfx_camera_to_camera_gpu( &scene_renderer->options.scene.camera, scene_renderer->options.scene.camera_view_to_world, &scene->camera );
+    scene->meshes_instances_count = scene_renderer->total_visible_meshes_instances_count;
+    scene->culled_lights_count = CRUDE_ARRAY_LENGTH( scene_renderer->culled_lights );
+    scene->total_lights_count = CRUDE_ARRAY_LENGTH( scene_renderer->lights );
+    scene->culled_tiled_shadowmap_texture_index = scene_renderer->pointlight_shadow_pass.culled_tetrahedron_shadow_texture.index;
+    scene->inv_shadow_map_size.x = 1.f / CRUDE_GFX_TETRAHEDRON_SHADOWMAP_SIZE;
+    scene->inv_shadow_map_size.y = 1.f / CRUDE_GFX_TETRAHEDRON_SHADOWMAP_SIZE;
+#if CRUDE_GFX_RAY_TRACING_DDGI_ENABLED
+    scene->indirect_light_texture_index = CRUDE_GFX_PASS_TEXTURE_INDEX( indirect_light.indirect_radiance_texture );
+#else
+    scene->indirect_light_texture_index = -1;
+#endif
+    scene->background_radiance = scene_renderer->world_environment_cpu.background_radiance;
+    scene->ambient_radiance = scene_renderer->world_environment_cpu.ambient_radiance;
+    scene->absolute_time = scene_renderer->options.absolute_time;
+    scene->absolute_frame = scene_renderer->gpu->absolute_frame;
+#if CRUDE_DEVELOP
+    scene->debug_mode = scene_renderer->options.debug.debug_mode;
+    scene->debug_flags1 = scene_renderer->options.debug.flags1;
+    scene->debug_force_metalness = scene_renderer->options.debug.force_metalness;
+    scene->debug_force_roughness = scene_renderer->options.debug.force_roughness;
+#endif
+
+    crude_gfx_cmd_memory_copy( primary_cmd, scene_tca, scene_renderer->scene_hga, 0, 0 );
+  }
+  
+  /* Update meshes instanse draws & joints matrices buffers */
+  {
+    crude_gfx_mesh_instance_draw                          *meshes_instances_draws;
+    XMFLOAT4X4                                            *joint_matrices;
+    crude_gfx_memory_allocation                            meshes_instances_draws_tca;
+    crude_gfx_memory_allocation                            joint_matrices_tca;
+    uint64                                                 joint_matrix_index;
+    uint64                                                 joints_matrices_offset;
+
+    meshes_instances_draws_tca = crude_gfx_linear_allocator_allocate( &gpu->frame_linear_allocator, sizeof( crude_gfx_mesh_instance_draw ) * scene_renderer->total_meshes_instances_count );
+    meshes_instances_draws = CRUDE_CAST( crude_gfx_mesh_instance_draw*, meshes_instances_draws_tca.cpu_address );
+  
+    joint_matrices_tca = crude_gfx_linear_allocator_allocate( &gpu->frame_linear_allocator, sizeof( XMFLOAT4X4 ) * scene_renderer->total_joints_matrices_count );
+    joint_matrices = CRUDE_CAST( XMFLOAT4X4*, joint_matrices_tca.cpu_address );
+    
+    joints_matrices_offset = 0u;
+    joint_matrix_index = 0u;
+    XMStoreFloat4x4( &joint_matrices[ joint_matrix_index++ ], XMMatrixIdentity( ) );
+
+    scene_renderer->total_visible_meshes_instances_count = 0u;
+
+    for ( uint32 model_instance_index = 0u; model_instance_index < CRUDE_ARRAY_LENGTH( scene_renderer->model_renderer_resoruces_instances ); ++model_instance_index )
+    {
+      crude_gfx_model_renderer_resources_instance const   *model_renderer_resources_instance;
+      crude_gfx_model_renderer_resources const            *model_renderer_resources;
+
+      model_renderer_resources_instance = &scene_renderer->model_renderer_resoruces_instances[ model_instance_index ];
+      model_renderer_resources = crude_gfx_model_renderer_resources_manager_access_model_renderer_resources( scene_renderer->model_renderer_resources_manager, model_renderer_resources_instance->model_renderer_resources_handle );
+
+      for ( uint32 node_index = 0u; node_index < CRUDE_ARRAY_LENGTH( model_renderer_resources->nodes ); ++node_index )
+      {
+        crude_gfx_node                                    *node;
+        XMMATRIX                                           mesh_to_model, model_to_world, mesh_to_world;
+
+        node = &model_renderer_resources->nodes[ node_index ];
+
+        joints_matrices_offset = joint_matrix_index;
+        
+        if ( node->meshes || node->skin != -1 )
+        {
+          mesh_to_model = crude_gfx_node_to_model( model_renderer_resources->nodes, model_renderer_resources_instance->nodes_transforms, node_index );
+          model_to_world = XMLoadFloat4x4( &model_renderer_resources_instance->model_to_world );
+          mesh_to_world = XMMatrixMultiply( mesh_to_model, model_to_world );
+        }
+
+        if ( node->meshes )
+        {
+          for ( uint32 mesh_index = 0; mesh_index < CRUDE_ARRAY_LENGTH( node->meshes ); ++mesh_index )
+          {
+            crude_gfx_mesh_cpu                            *cpu_mesh;
+            crude_gfx_mesh_instance_draw                  *gpu_meshe_instance_draw;
+
+            cpu_mesh = &model_renderer_resources->meshes[ node->meshes[ mesh_index ] ];
+            gpu_meshe_instance_draw = &meshes_instances_draws[ scene_renderer->total_visible_meshes_instances_count ]; 
+
+            XMStoreFloat4x4( &gpu_meshe_instance_draw->mesh_to_world, mesh_to_world );
+            XMStoreFloat4x4( &gpu_meshe_instance_draw->world_to_mesh, XMMatrixInverse( NULL, mesh_to_world ) );
+            gpu_meshe_instance_draw->mesh_draw_index = cpu_mesh->gpu_mesh_global_index;
+
+            if ( node->skin != -1 )
+            {
+              if ( CRUDE_ARRAY_LENGTH( node->affected_joints[ mesh_index ] ) )
+              {
+                crude_gfx_skin                             *skin;
+                XMMATRIX                                   model_to_mesh;
+                XMVECTOR                                   position_max, position_min;
+                XMVECTOR                                   bounding_center;
+                float32                                    bounding_radius;
+              
+                skin = &model_renderer_resources->skins[ node->skin ];
+                model_to_mesh = XMMatrixInverse( NULL, mesh_to_model );
+
+                position_max = XMLoadFloat3( &node->affected_joints_local_aabb[ mesh_index ][ 0 ].max );
+                position_min = XMLoadFloat3( &node->affected_joints_local_aabb[ mesh_index ][ 0 ].min );
+
+                for ( uint32 affected_joint = 0; affected_joint < CRUDE_ARRAY_LENGTH( node->affected_joints[ mesh_index ] ); ++affected_joint )
+                {
+                  crude_gfx_aabb_cpu                      *local_joint_aabb;
+                  XMVECTOR                                 animated_joint_aabb_max;
+                  XMVECTOR                                 animated_joint_aabb_min;
+                  XMMATRIX                                 joint_matrix, inverse_bind_matrix;
+
+                  local_joint_aabb = &node->affected_joints_local_aabb[ mesh_index ][ affected_joint ];
+
+                  inverse_bind_matrix = XMLoadFloat4x4( &skin->inverse_bind_matrices[ node->affected_joints[ mesh_index ][ affected_joint ] ] );
+                  joint_matrix = crude_gfx_node_to_model( model_renderer_resources->nodes, model_renderer_resources_instance->nodes_transforms, skin->joints[ node->affected_joints[ mesh_index ][ affected_joint ] ] );
+                  joint_matrix = XMMatrixMultiply( XMMatrixMultiply( inverse_bind_matrix, joint_matrix ), model_to_mesh );
+                  
+                  animated_joint_aabb_max = XMVector3Transform( XMLoadFloat3( &local_joint_aabb->max ), joint_matrix );
+                  animated_joint_aabb_min = XMVector3Transform( XMLoadFloat3( &local_joint_aabb->min ), joint_matrix );
+                  position_max = XMVectorMax( position_max, animated_joint_aabb_max );
+                  position_min = XMVectorMin( position_min, animated_joint_aabb_min );
+                }
+
+                bounding_center = XMVectorAdd( position_max, position_min );
+                bounding_center = XMVectorScale( bounding_center, 0.5f );
+                bounding_radius = XMVectorGetX( XMVectorMax( XMVector3Length( position_max - bounding_center ), XMVector3Length( position_min - bounding_center ) ) );
+                
+                XMStoreFloat4( &gpu_meshe_instance_draw->bounding_sphere, XMVectorSet( XMVectorGetX( bounding_center ), XMVectorGetY( bounding_center ), XMVectorGetZ( bounding_center ), bounding_radius ) );
+              }
+              else
+              {
+                gpu_meshe_instance_draw->bounding_sphere = cpu_mesh->default_bounding_sphere;
+              }
+
+              gpu_meshe_instance_draw->joints_matrices_offset = joints_matrices_offset;
+            }
+            else
+            {
+              gpu_meshe_instance_draw->bounding_sphere = cpu_mesh->default_bounding_sphere;
+              gpu_meshe_instance_draw->joints_matrices_offset = 0;
+            }
+
+            gpu_meshe_instance_draw->flags = 0;
+
+            if ( model_renderer_resources_instance->cast_shadow )
+            {
+              gpu_meshe_instance_draw->flags |= CRUDE_GFX_MESH_INSTANCE_DRAW_FLAG_CAST_SHADOW;
+            }
+            
+            if ( node->skin != -1 )
+            {
+              gpu_meshe_instance_draw->flags |= CRUDE_GFX_MESH_INSTANCE_DRAW_FLAG_ANIMATED;
+            }
+
+            ++scene_renderer->total_visible_meshes_instances_count;
+          }
+        }
+
+        if ( node->skin != -1 )
+        {
+          crude_gfx_skin                                  *skin;
+          XMMATRIX                                         model_to_mesh;
+
+          skin = &model_renderer_resources->skins[ node->skin ];
+          
+          model_to_mesh = XMMatrixInverse( NULL, mesh_to_model );
+
+          for ( uint64 i = 0; i < CRUDE_ARRAY_LENGTH( skin->joints ); ++i )
+          {
+            XMMATRIX                                           joint_matrix, inverse_bind_matrix;
+
+            inverse_bind_matrix = XMLoadFloat4x4( &skin->inverse_bind_matrices[ i ] );
+            joint_matrix = crude_gfx_node_to_model( model_renderer_resources->nodes, model_renderer_resources_instance->nodes_transforms, skin->joints[ i ] );
+            XMStoreFloat4x4( &joint_matrices[ joint_matrix_index++ ], XMMatrixMultiply( XMMatrixMultiply( inverse_bind_matrix, joint_matrix ), model_to_mesh ) );
+          }
+        }
+      }
+    }
+  
+    crude_gfx_cmd_memory_copy( primary_cmd, joint_matrices_tca, scene_renderer->joint_matrices_hga, 0, 0 );
+    crude_gfx_cmd_memory_copy( primary_cmd, meshes_instances_draws_tca, scene_renderer->meshes_instances_draws_hga, 0, 0 );
+  }
+  
+#if CRUDE_GFX_RAY_TRACING_ENABLED
+  crude_gfx_scene_renderer_update_top_level_acceleration_structure_( scene_renderer, primary_cmd );
+#endif /* CRUDE_GFX_RAY_TRACING_ENABLED */
+
+  /* Update meshlets counes storage buffers*/
+  {
+    crude_gfx_mesh_draw_count                             *mesh_draw_counts;
+    crude_gfx_memory_allocation                            mesh_task_indirect_count_tca;
+
+    mesh_task_indirect_count_tca = crude_gfx_linear_allocator_allocate( &gpu->frame_linear_allocator, sizeof( crude_gfx_mesh_draw_count ) );
+    mesh_draw_counts = CRUDE_CAST( crude_gfx_mesh_draw_count*, mesh_task_indirect_count_tca.cpu_address );
+
+    *mesh_draw_counts = CRUDE_COMPOUNT_EMPTY( crude_gfx_mesh_draw_count );
+    mesh_draw_counts->opaque_mesh_visible_early_count = 0u;
+    mesh_draw_counts->opaque_mesh_culled_count = 0u;
+    mesh_draw_counts->opaque_mesh_visible_late_count = 0u;
+    mesh_draw_counts->transparent_mesh_visible_count = 0u;
+    mesh_draw_counts->transparent_mesh_culled_count = 0u;
+    mesh_draw_counts->total_mesh_count = scene_renderer->total_visible_meshes_instances_count;
+    mesh_draw_counts->depth_pyramid_texture_index = scene_renderer->depth_pyramid_pass.depth_pyramid_texture_handle.index;
+
+    crude_gfx_cmd_memory_copy( primary_cmd, mesh_task_indirect_count_tca, scene_renderer->mesh_task_indirect_count_hga, 0, 0 );
+  }
+  
+  /* Update debug draw vertices */
+  if ( CRUDE_ARRAY_LENGTH( scene_renderer->debug_line_vertices_3d ) > 0 )
+  {
+    crude_gfx_debug_line_vertex                           *debug_line_vertices;
+    crude_gfx_memory_allocation                            debug_line_vertices_tca;
+
+    debug_line_vertices_tca = crude_gfx_linear_allocator_allocate( &gpu->frame_linear_allocator, sizeof( crude_gfx_debug_line_vertex ) * CRUDE_ARRAY_LENGTH( scene_renderer->debug_line_vertices_3d ) );
+    debug_line_vertices = CRUDE_CAST( crude_gfx_debug_line_vertex*, debug_line_vertices_tca.cpu_address );
+
+    for ( uint32 i = 0; i < CRUDE_ARRAY_LENGTH( scene_renderer->debug_line_vertices_3d ); ++i )
+    {
+      debug_line_vertices[ i ] = scene_renderer->debug_line_vertices_3d[ i ];
+    }
+    
+    crude_gfx_cmd_memory_copy( primary_cmd, debug_line_vertices_tca, scene_renderer->debug_line_vertices_hga, 0, 0 );
+  }
+  
+  /* Update debug draw commands */
+  {
+    crude_gfx_debug_counts                                *debug_draw_command;
+    crude_gfx_memory_allocation                            debug_draw_command_tca;
+
+    debug_draw_command_tca = crude_gfx_linear_allocator_allocate( &gpu->frame_linear_allocator, sizeof( crude_gfx_debug_counts ) );
+    debug_draw_command = CRUDE_CAST( crude_gfx_debug_counts*, debug_draw_command_tca.cpu_address );
+
+    *debug_draw_command = CRUDE_COMPOUNT_EMPTY( crude_gfx_debug_counts );
+    debug_draw_command->debug_lines_2d_instances_count = 1u;
+    debug_draw_command->debug_lines_3d_instances_count = 1u;
+    debug_draw_command->debug_lines_3d_vertices_count = CRUDE_ARRAY_LENGTH( scene_renderer->debug_line_vertices_3d );
+    debug_draw_command->debug_cubes_vertices_count = 36u;
+    crude_gfx_cmd_memory_copy( primary_cmd, debug_draw_command_tca, scene_renderer->debug_commands_hga, 0, 0 );
+  }
+
+  crude_gfx_cmd_pop_marker( primary_cmd );
+}
+
+void
+crude_scene_renderer_register_nodes_instances_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ crude_ecs                                          *world,
+  _In_ crude_entity                                        node
+)
+{
+  uint32                                                   model_renderer_resoruces_instances_count;
+  ecs_iter_t                                               children_it;
+  XMMATRIX                                                 model_to_custom_model;
+
+  children_it = crude_ecs_children( world, node );
+
+  model_to_custom_model = XMMatrixIdentity( );
+  
+  model_renderer_resoruces_instances_count = CRUDE_ARRAY_LENGTH( scene_renderer->model_renderer_resoruces_instances );
+
+  if ( CRUDE_ENTITY_HAS_COMPONENT( world, node, crude_gltf ) )
+  {
+    crude_gltf                                            *child_gltf;
+    bool                                                   should_render;
+
+    child_gltf = CRUDE_ENTITY_GET_MUTABLE_COMPONENT( world, node, crude_gltf );
+  
+    should_render = !child_gltf->hidden && ( child_gltf->model_renderer_resources_instance.model_renderer_resources_handle.index != -1 );
+
+#if CRUDE_DEVELOP
+    if ( child_gltf->debug_only )
+    {
+      should_render = should_render && scene_renderer->options.debug.show_debug_gltf;
+    }
+#endif /* CRUDE_DEVELOP */
+
+    if ( should_render )
+    {
+      XMStoreFloat4x4( &child_gltf->model_renderer_resources_instance.model_to_world, XMMatrixMultiply( model_to_custom_model, crude_transform_node_to_world( world, node, CRUDE_ENTITY_GET_IMMUTABLE_COMPONENT( world, node, crude_transform ) ) ) );
+      child_gltf->model_renderer_resources_instance.unique_id = node;
+      CRUDE_ARRAY_PUSH( scene_renderer->model_renderer_resoruces_instances, child_gltf->model_renderer_resources_instance );
+    }
+  }
+  
+  if ( CRUDE_ENTITY_HAS_COMPONENT( world, node, crude_light ) )
+  {
+    crude_gfx_light_cpu light_gpu = CRUDE_COMPOUNT_EMPTY( crude_gfx_light_cpu );
+    light_gpu.light = *CRUDE_ENTITY_GET_MUTABLE_COMPONENT( world, node, crude_light );
+    XMStoreFloat3( &light_gpu.translation, crude_transform_node_to_world( world, node, CRUDE_ENTITY_GET_MUTABLE_COMPONENT( world, node, crude_transform ) ).r[ 3 ] );
+    CRUDE_ARRAY_PUSH( scene_renderer->lights, light_gpu ); 
+  }
+  
+  if ( CRUDE_ENTITY_HAS_COMPONENT( world, node, crude_world_environment ) )
+  {
+    crude_world_environment *world_environment = CRUDE_ENTITY_GET_MUTABLE_COMPONENT( world, node, crude_world_environment );
+    
+    scene_renderer->world_environment_cpu.background_radiance.x = world_environment->background_color.x * world_environment->background_intencity;
+    scene_renderer->world_environment_cpu.background_radiance.y = world_environment->background_color.y * world_environment->background_intencity;
+    scene_renderer->world_environment_cpu.background_radiance.z = world_environment->background_color.z * world_environment->background_intencity;
+    
+    scene_renderer->world_environment_cpu.ambient_radiance.x = world_environment->ambient_color.x * world_environment->ambient_intencity;
+    scene_renderer->world_environment_cpu.ambient_radiance.y = world_environment->ambient_color.y * world_environment->ambient_intencity;
+    scene_renderer->world_environment_cpu.ambient_radiance.z = world_environment->ambient_color.z * world_environment->ambient_intencity;
+  }
+  
+  if ( CRUDE_ENTITY_HAS_COMPONENT( world, node, crude_ddgi_area ) )
+  {
+    crude_ddgi_area *ddgi_area = CRUDE_ENTITY_GET_MUTABLE_COMPONENT( world, node, crude_ddgi_area );
+    
+    XMStoreFloat3( &scene_renderer->ddgi_area.probe_grid_position, crude_transform_node_to_world( world, node, NULL ).r[ 3 ] );
+    scene_renderer->ddgi_area.probe_spacing = ddgi_area->probe_spacing;
+    scene_renderer->ddgi_area.hysteresis = ddgi_area->hysteresis;
+    scene_renderer->ddgi_area.self_shadow_bias = ddgi_area->self_shadow_bias;
+    scene_renderer->ddgi_area.infinite_bounces_multiplier = ddgi_area->infinite_bounces_multiplier;
+    scene_renderer->ddgi_area.max_probe_offset = ddgi_area->max_probe_offset;
+    scene_renderer->ddgi_area.shadow_weight_power = ddgi_area->shadow_weight_power;
+    scene_renderer->ddgi_area.probe_update_per_frame = ddgi_area->probe_update_per_frame;
+    scene_renderer->ddgi_area.probe_count = ddgi_area->probe_count;
+    scene_renderer->ddgi_area.probe_rays = ddgi_area->probe_rays;
+    scene_renderer->ddgi_area.offsets_calculations_count = ddgi_area->offsets_calculations_count;
+    scene_renderer->ddgi_area.use_half_resolution = ddgi_area->use_half_resolution;
+    scene_renderer->ddgi_enabled = true;
+  }
+  
+#if CRUDE_EDITOR
+  if ( scene_renderer->options.debug.show_debug_gltf )
+  {
+    if ( CRUDE_ENTITY_HAS_COMPONENT( world, node, crude_light ) )
+    {
+      crude_gfx_light_cpu light_gpu = CRUDE_COMPOUNT_EMPTY( crude_gfx_light_cpu );
+      XMStoreFloat3( &light_gpu.translation, crude_transform_node_to_world( world, node, CRUDE_ENTITY_GET_MUTABLE_COMPONENT( world, node, crude_transform ) ).r[ 3 ] );
+      
+      XMStoreFloat4x4( &scene_renderer->light_model_renderer_resources_instance.model_to_world, XMMatrixTranslation( light_gpu.translation.x, light_gpu.translation.y, light_gpu.translation.z ) );
+      CRUDE_ARRAY_PUSH( scene_renderer->model_renderer_resoruces_instances, scene_renderer->light_model_renderer_resources_instance );
+    }
+  
+    if ( CRUDE_ENTITY_HAS_COMPONENT( world, node, crude_camera ) )
+    {
+      model_to_custom_model = XMMatrixScaling( 0.25, 0.25, 0.25 );
+      XMStoreFloat4x4( &scene_renderer->camera_model_renderer_resources_instance.model_to_world, XMMatrixMultiply( model_to_custom_model, crude_transform_node_to_world( world, node, CRUDE_ENTITY_GET_IMMUTABLE_COMPONENT( world, node, crude_transform ) ) ) );
+      CRUDE_ARRAY_PUSH( scene_renderer->model_renderer_resoruces_instances, scene_renderer->camera_model_renderer_resources_instance );
+    }
+  
+    if ( CRUDE_ENTITY_HAS_COMPONENT( world, node, crude_audio_player ) )
+    {
+      XMStoreFloat4x4( &scene_renderer->audo_player_model_renderer_resources_instance.model_to_world, XMMatrixMultiply( model_to_custom_model, crude_transform_node_to_world( world, node, CRUDE_ENTITY_GET_IMMUTABLE_COMPONENT( world, node, crude_transform ) ) ) );
+      CRUDE_ARRAY_PUSH( scene_renderer->model_renderer_resoruces_instances, scene_renderer->audo_player_model_renderer_resources_instance );
+    }
+  
+    if ( CRUDE_ENTITY_HAS_COMPONENT( world, node, crude_audio_listener ) )
+    {
+      XMStoreFloat4x4( &scene_renderer->audio_listener_model_renderer_resources_instance.model_to_world, XMMatrixMultiply( model_to_custom_model, crude_transform_node_to_world( world, node, CRUDE_ENTITY_GET_IMMUTABLE_COMPONENT( world, node, crude_transform ) ) ) );
+      CRUDE_ARRAY_PUSH( scene_renderer->model_renderer_resoruces_instances, scene_renderer->audio_listener_model_renderer_resources_instance );
+    }
+  
+    if ( CRUDE_ENTITY_HAS_COMPONENT( world, node, crude_ray ) )
+    {
+      float32 ray_distance = CRUDE_ENTITY_GET_IMMUTABLE_COMPONENT( world, node, crude_ray )->distance;
+      XMMATRIX node_to_world = crude_transform_node_to_world( world, node, CRUDE_ENTITY_GET_IMMUTABLE_COMPONENT( world, node, crude_transform ) );
+      XMMATRIX scale_matrix = XMMatrixScaling( 1, 1, ray_distance );
+      XMMATRIX model_to_world = model_to_custom_model;
+
+      model_to_world = XMMatrixMultiply( model_to_world, scale_matrix );
+      model_to_world = XMMatrixMultiply( model_to_world, node_to_world );
+      XMStoreFloat4x4( &scene_renderer->ray_model_renderer_resources_instance.model_to_world, model_to_world );
+      CRUDE_ARRAY_PUSH( scene_renderer->model_renderer_resoruces_instances, scene_renderer->ray_model_renderer_resources_instance );
+    }
+  }
+  
+  if ( scene_renderer->options.debug.show_debug_gltf )
+  {
+    if ( CRUDE_ENTITY_HAS_COMPONENT( world, node, crude_physics_body ) )
+    {
+      crude_physics_body                                  *physics_body;
+    
+      physics_body = CRUDE_ENTITY_GET_MUTABLE_COMPONENT( world, node, crude_physics_body );
+    
+      switch ( physics_body->shape.type )
+      {
+      case CRUDE_PHYSICS_SHAPE_TYPE_CAPSULE:
+      {
+        crude_gfx_scene_renderer_debug_queue_draw_capsule( scene_renderer, crude_transform_node_to_world( world, node, NULL ), physics_body->shape.capsule.height, physics_body->shape.capsule.radius );
+        break;
+      }
+      case CRUDE_PHYSICS_SHAPE_TYPE_BOX:
+      {
+        model_to_custom_model = XMMatrixMultiply( XMMatrixScaling( physics_body->shape.box.extent.x, physics_body->shape.box.extent.y, physics_body->shape.box.extent.z ), model_to_custom_model );
+        XMStoreFloat4x4( &scene_renderer->physics_box_collision_model_renderer_resources_instance.model_to_world, XMMatrixMultiply( model_to_custom_model, crude_transform_node_to_world( world, node, CRUDE_ENTITY_GET_IMMUTABLE_COMPONENT( world, node, crude_transform ) ) ) );
+        CRUDE_ARRAY_PUSH( scene_renderer->model_renderer_resoruces_instances, scene_renderer->physics_box_collision_model_renderer_resources_instance );
+        break;
+      }
+      case CRUDE_PHYSICS_SHAPE_TYPE_MESH:
+      {
+        if ( physics_body->shape.mesh.mesh_handle.index != -1 )
+        {
+          crude_physics_shape_mesh_container              *shape_mesh_container;
+
+          shape_mesh_container = crude_physics_shapes_manager_access_mesh( scene_renderer->physics_shapes_manager, physics_body->shape.mesh.mesh_handle );
+          XMStoreFloat4x4( &shape_mesh_container->debug_model_renderer_resource_instance.model_to_world, XMMatrixMultiply( model_to_custom_model, crude_transform_node_to_world( world, node, CRUDE_ENTITY_GET_IMMUTABLE_COMPONENT( world, node, crude_transform ) ) ) );
+          CRUDE_ARRAY_PUSH( scene_renderer->model_renderer_resoruces_instances, shape_mesh_container->debug_model_renderer_resource_instance );
+        }
+        break;
+      }
+      case CRUDE_PHYSICS_SHAPE_TYPE_NONE:
+      {
+        break;
+      }
+      default:
+      {
+        CRUDE_ASSERT( false );
+        break;
+      }
+      }
+    }
+  }
+#endif /* CRUDE_DEVELOP */
+
+  if ( model_renderer_resoruces_instances_count != CRUDE_ARRAY_LENGTH( scene_renderer->model_renderer_resoruces_instances ) )
+  {
+    for ( uint32 i = model_renderer_resoruces_instances_count; i < CRUDE_ARRAY_LENGTH( scene_renderer->model_renderer_resoruces_instances ); ++i )
+    {
+      scene_renderer->model_renderer_resoruces_instances[ i ].unique_id = node;
+    }
+  }
+
+  while ( ecs_children_next( &children_it ) )
+  {
+    for ( size_t i = 0; i < children_it.count; ++i )
+    {
+      crude_entity child = crude_entity_from_iterator( &children_it, i );
+      crude_scene_renderer_register_nodes_instances_( scene_renderer, world, child );
+    }
+  }
+}
+
+void
+crude_scene_renderer_update_lights_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+)
+{
+  crude_gfx_device                                        *gpu;
+  crude_camera const                                      *camera;
+  crude_transform const                                   *camera_transform;
+  XMMATRIX                                                 view_to_world, world_to_view, view_to_clip, clip_to_view, world_to_clip;
+  float32                                                  tile_size, tile_position_x, tile_position_y;
+  
+  gpu = scene_renderer->gpu;
+
+  camera = &scene_renderer->options.scene.camera;
+  view_to_world = XMLoadFloat4x4( &scene_renderer->options.scene.camera_view_to_world );
+
+  world_to_view = XMMatrixInverse( NULL, view_to_world );
+  view_to_clip = crude_camera_view_to_clip( camera );
+  clip_to_view = XMMatrixInverse( NULL, view_to_clip );
+  world_to_clip = XMMatrixMultiply( world_to_view, view_to_clip );
+  
+  CRUDE_ARRAY_SET_LENGTH( scene_renderer->culled_lights, 0 );
+  
+  tile_size = 2048.f / CRUDE_GFX_TETRAHEDRON_SHADOWMAP_SIZE;
+  
+  tile_position_x = 0.f;
+  tile_position_y = 0.f;
+  
+  for ( uint32 light_index = 0; light_index < CRUDE_ARRAY_LENGTH( scene_renderer->lights ); ++light_index )
+  {
+    crude_gfx_light_cpu                               *light;
+    XMVECTOR                                           light_world_position, light_view_position;
+    XMVECTOR                                           aabb, aabb_screen;
+    float32                                            aabb_screen_min_x, aabb_screen_max_x, aabb_screen_min_y, aabb_screen_max_y;
+    float32                                            aabb_screen_width, aabb_screen_height, aabb_screen_width_cropped, aabb_screen_height_cropped;
+    float32                                            light_view_position_length, light_radius;
+    bool                                               camera_inside, camera_visible, ty_camera_inside, tx_camera_inside;
+  
+    light = &scene_renderer->lights[ light_index ];
+  
+    /* Transform light in camera space */
+    light_world_position = XMVectorSet( light->translation.x, light->translation.y, light->translation.z, 1.0f );
+    light_radius = light->light.radius;
+  
+    light_view_position = XMVector4Transform( light_world_position, world_to_view );
+#if CRUDE_RIGHT_HAND
+    light_view_position = XMVectorSetZ( light_view_position, -1.f * XMVectorGetZ( light_view_position ) );
+#endif
+    camera_visible = -XMVectorGetZ( light_view_position ) - light_radius < camera->near_z;
+  
+    if ( !camera_visible )
+    {
+      continue;
+    }
+  
+    aabb = crude_compute_projected_sphere_aabb( light_world_position, light_radius, world_to_view, view_to_clip, camera->near_z );
+  
+    light_view_position_length = XMVectorGetX( XMVector3Length( light_view_position ) );
+    camera_inside = ( light_view_position_length - light_radius ) < camera->near_z;
+  
+    if ( camera_inside )
+    {
+      aabb = { -1,-1, 1, 1 };
+    }
+
+    aabb_screen = XMVectorSet(
+      ( XMVectorGetX( aabb ) * 0.5f + 0.5f ) * ( gpu->renderer_size.x - 1 ),
+      ( XMVectorGetY( aabb ) * 0.5f + 0.5f ) * ( gpu->renderer_size.y - 1 ),
+      ( XMVectorGetZ( aabb ) * 0.5f + 0.5f ) * ( gpu->renderer_size.x - 1 ),
+      ( XMVectorGetW( aabb ) * 0.5f + 0.5f ) * ( gpu->renderer_size.y - 1 )
+    );
+  
+    aabb_screen_width = XMVectorGetZ( aabb_screen ) - XMVectorGetX( aabb_screen );
+    aabb_screen_height = XMVectorGetW( aabb_screen ) - XMVectorGetY( aabb_screen );
+  
+    if ( aabb_screen_width < 0.0001f || aabb_screen_height < 0.0001f )
+    {
+      continue;
+    }
+  
+    aabb_screen_min_x = XMVectorGetX( aabb_screen );
+    aabb_screen_min_y = XMVectorGetY( aabb_screen );
+    
+    aabb_screen_max_x = aabb_screen_min_x + aabb_screen_width;
+    aabb_screen_max_y = aabb_screen_min_y + aabb_screen_height;
+  
+    if ( aabb_screen_min_x > gpu->renderer_size.x || aabb_screen_min_y > gpu->renderer_size.y )
+    {
+      continue;
+    }
+  
+    if ( aabb_screen_max_x < 0.0f || aabb_screen_max_y < 0.0f )
+    {
+      continue;
+    }
+  
+    aabb_screen_min_x = CRUDE_MAX( aabb_screen_min_x, 0.0f );
+    aabb_screen_min_y = CRUDE_MAX( aabb_screen_min_y, 0.0f );
+  
+    aabb_screen_max_x = CRUDE_MIN( aabb_screen_max_x, gpu->renderer_size.x );
+    aabb_screen_max_y = CRUDE_MIN( aabb_screen_max_y, gpu->renderer_size.y );
+
+    aabb_screen_width_cropped = aabb_screen_max_x - aabb_screen_min_x;
+    aabb_screen_height_cropped = aabb_screen_max_y - aabb_screen_min_y;
+
+    crude_gfx_culled_light_cpu culled_light_cpu;
+    culled_light_cpu.light_index = light_index;
+    culled_light_cpu.screen_area = aabb_screen_width_cropped * aabb_screen_height_cropped;
+    culled_light_cpu.tile_position.x = tile_position_x;
+    culled_light_cpu.tile_position.y = tile_position_y;
+    culled_light_cpu.tile_size = tile_size;
+    CRUDE_ARRAY_PUSH( scene_renderer->culled_lights, culled_light_cpu );
+
+    tile_position_x += tile_size;
+
+    if ( tile_position_x > 0.99 )
+    {
+      tile_position_x = 0;
+      tile_position_y += tile_size;
+    }
+  }
+}
+
+#if CRUDE_GFX_RAY_TRACING_ENABLED
+
+#if CRUDE_GFX_VULKAN_AVAILABLE
+void
+crude_gfx_scene_renderer_fill_top_level_acceleration_structures_instances_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _Inout_ VkAccelerationStructureInstanceKHR             **vk_acceleration_structure_instances
+)
+{
+  uint32                                                   instance_custom_index;
+
+  instance_custom_index = 0u;
+  for ( uint32 model_instance_index = 0u; model_instance_index < CRUDE_ARRAY_LENGTH( scene_renderer->model_renderer_resoruces_instances ); ++model_instance_index )
+  {
+    crude_gfx_model_renderer_resources_instance const     *model_renderer_resources_instance;
+    crude_gfx_model_renderer_resources const              *model_renderer_resources;
+  
+    model_renderer_resources_instance = &scene_renderer->model_renderer_resoruces_instances[ model_instance_index ];
+    model_renderer_resources = crude_gfx_model_renderer_resources_manager_access_model_renderer_resources( scene_renderer->model_renderer_resources_manager, model_renderer_resources_instance->model_renderer_resources_handle );
+  
+    if ( !model_renderer_resources_instance->rtx_affected || !model_renderer_resources->rtx_affected )
+    {
+      for ( uint32 node_index = 0u; node_index < CRUDE_ARRAY_LENGTH( model_renderer_resources->nodes ); ++node_index )
+      {
+        crude_gfx_node                                      *node;
+
+        node = &model_renderer_resources->nodes[ node_index ];
+          
+        if ( node->meshes )
+        {
+          instance_custom_index += CRUDE_ARRAY_LENGTH( node->meshes );
+        }
+      }
+      continue;
+    }
+
+    for ( uint32 node_index = 0u; node_index < CRUDE_ARRAY_LENGTH( model_renderer_resources->nodes ); ++node_index )
+    {
+      crude_gfx_node                                      *node;
+      XMMATRIX                                             mesh_to_model, model_to_world, mesh_to_world;
+
+      node = &model_renderer_resources->nodes[ node_index ];
+        
+      if ( !node->meshes )
+      {
+        continue;
+      }
+
+      CRUDE_ASSERT( node->skin == -1 );
+      
+      mesh_to_model = crude_gfx_node_to_model( model_renderer_resources->nodes, model_renderer_resources_instance->nodes_transforms, node_index );
+      model_to_world = XMLoadFloat4x4( &model_renderer_resources_instance->model_to_world );
+      mesh_to_world = XMMatrixMultiply( mesh_to_model, model_to_world );
+      
+      for ( uint32 mesh_index = 0; mesh_index < CRUDE_ARRAY_LENGTH( node->meshes ); ++mesh_index )
+      {
+        crude_gfx_mesh_cpu                             *cpu_mesh;
+        crude_gfx_mesh_instance_draw                   *gpu_meshe_instance_draw;
+        VkAccelerationStructureInstanceKHR              vk_acceleration_structure_instance;
+        VkAccelerationStructureDeviceAddressInfoKHR     vk_acceleration_structure_address_info;
+        VkDeviceAddress                                 vk_blas_address;
+        VkTransformMatrixKHR                            vk_transform; 
+      
+        cpu_mesh = &model_renderer_resources->meshes[ node->meshes[ mesh_index ] ];
+        
+        for ( int32 y = 0; y < 3; ++y )
+        {
+          for ( int32 x = 0; x < 4; ++x )
+          {
+            vk_transform.matrix[ y ][ x ] = XMVectorGetByIndex( mesh_to_world.r[ x ], y );
+          }
+        }
+      
+        vk_acceleration_structure_address_info = CRUDE_COMPOUNT_EMPTY( VkAccelerationStructureDeviceAddressInfoKHR );
+        vk_acceleration_structure_address_info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+        vk_acceleration_structure_address_info.accelerationStructure = model_renderer_resources->rhi_blases[ node->meshes[ mesh_index ] ].vk.acceleration_structure;
+      
+        vk_blas_address = scene_renderer->gpu->rhi_device.vk.vkGetAccelerationStructureDeviceAddressKHR( scene_renderer->gpu->rhi_device.vk.device, &vk_acceleration_structure_address_info );
+      
+        vk_acceleration_structure_instance = CRUDE_COMPOUNT_EMPTY( VkAccelerationStructureInstanceKHR );
+        vk_acceleration_structure_instance.mask = 0xff;
+        vk_acceleration_structure_instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR; /* TODO ??? */
+        vk_acceleration_structure_instance.accelerationStructureReference = vk_blas_address;
+        vk_acceleration_structure_instance.transform = vk_transform;
+        vk_acceleration_structure_instance.instanceCustomIndex = instance_custom_index;
+      
+        CRUDE_ARRAY_PUSH( *vk_acceleration_structure_instances, vk_acceleration_structure_instance );
+      
+        ++instance_custom_index;
+      }
+    }
+  }
+}
+#endif /* CRUDE_GFX_VULKAN_AVAILABLE */
+
+void
+crude_gfx_scene_renderer_create_top_level_acceleration_structure_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ crude_gfx_cmd_buffer                               *primary_cmd
+)
+{
+#if CRUDE_GFX_VULKAN_AVAILABLE
+  VkAccelerationStructureInstanceKHR                      *vk_acceleration_structure_instances;
+#endif
+  crude_gfx_rhi_acceleration_structure_create_info         acceleration_structure_create_info;
+  crude_gfx_rhi_acceleration_structure_build_geometry_info acceleration_build_geometry_info;
+  crude_gfx_rhi_acceleration_structure_geometry            acceleration_structure_geometry;
+  crude_gfx_rhi_acceleration_structure_build_sizes_info    acceleration_structure_build_sizes_info;
+  crude_gfx_rhi_acceleration_structure_build_range_info    acceleration_structure_build_range_info;
+  uint64                                                   temporary_allocator_marker;
+  uint32                                                   max_instance_count;
+  uint32                                                   instance_custom_index;
+
+  temporary_allocator_marker = crude_stack_allocator_get_marker( scene_renderer->temporary_allocator );
+  
+  if ( crude_gfx_rhi_get_type( ) == CRUDE_GFX_RHI_TYPE_VULKAN )
+  {
+#if CRUDE_GFX_VULKAN_AVAILABLE
+    CRUDE_ARRAY_INITIALIZE_WITH_CAPACITY( vk_acceleration_structure_instances, scene_renderer->total_visible_meshes_instances_count, crude_stack_allocator_pack( scene_renderer->temporary_allocator ) );
+    crude_gfx_scene_renderer_fill_top_level_acceleration_structures_instances_( scene_renderer, &vk_acceleration_structure_instances );
+
+    max_instance_count = CRUDE_ARRAY_LENGTH( vk_acceleration_structure_instances );
+    
+    scene_renderer->tlas_instances_hga = crude_gfx_memory_allocate_with_pname(
+      scene_renderer->gpu,
+      max_instance_count * sizeof( VkAccelerationStructureInstanceKHR ),
+      CRUDE_GFX_MEMORY_TYPE_CPU_GPU, /* !TODO try gpu only and check if it affect perfomance*/
+      "tlas_instances_hga",
+      CRUDE_GFX_RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR );
+
+    crude_memory_copy( scene_renderer->tlas_instances_hga.cpu_address, vk_acceleration_structure_instances, max_instance_count * sizeof( VkAccelerationStructureInstanceKHR ) );
+#else
+    CRUDE_ASSERT( false );
+#endif /* CRUDE_GFX_VULKAN_AVAILABLE */
+  }
+  else if ( crude_gfx_rhi_get_type( ) == CRUDE_GFX_RHI_TYPE_NULL )
+  {
+    scene_renderer->tlas_instances_hga = crude_gfx_memory_allocate_with_pname(
+      scene_renderer->gpu,
+      0,
+      CRUDE_GFX_MEMORY_TYPE_CPU_GPU,
+      "tlas_instances_hga",
+      CRUDE_GFX_RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR );
+  }
+  else
+  {
+    CRUDE_ASSERT( false );
+  }
+
+  acceleration_structure_geometry = CRUDE_COMPOUNT_EMPTY( crude_gfx_rhi_acceleration_structure_geometry );
+  acceleration_structure_geometry.geometry_type = CRUDE_GFX_RHI_GEOMETRY_TYPE_INSTANCES_KHR;
+  acceleration_structure_geometry.flags = CRUDE_GFX_RHI_GEOMETRY_OPAQUE_BIT_KHR;
+  acceleration_structure_geometry.geometry.instances.array_of_pointers = false;
+  acceleration_structure_geometry.geometry.instances.data.device_address = scene_renderer->tlas_instances_hga.gpu_address;
+
+  acceleration_build_geometry_info = CRUDE_COMPOUNT_EMPTY( crude_gfx_rhi_acceleration_structure_build_geometry_info );
+  acceleration_build_geometry_info.type = CRUDE_GFX_RHI_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+  acceleration_build_geometry_info.flags = CRUDE_GFX_RHI_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_BIT_KHR | CRUDE_GFX_RHI_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | CRUDE_GFX_RHI_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+  acceleration_build_geometry_info.geometry_count = 1;
+  acceleration_build_geometry_info.geometries = &acceleration_structure_geometry;
+  
+  acceleration_structure_build_sizes_info = CRUDE_COMPOUNT_EMPTY( crude_gfx_rhi_acceleration_structure_build_sizes_info );  
+  
+  crude_gfx_cmd_add_buffer_barrier( primary_cmd, scene_renderer->tlas_instances_hga.buffer_handle, CRUDE_GFX_RHI_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, CRUDE_GFX_RHI_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE );
+
+  crude_gfx_rhi_get_acceleration_structure_build_sizes(
+    &scene_renderer->gpu->rhi_device, scene_renderer->allocator,
+    CRUDE_GFX_RHI_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+    &acceleration_build_geometry_info,
+    &max_instance_count,
+    &acceleration_structure_build_sizes_info );
+  
+  scene_renderer->tlas_hga = crude_gfx_memory_allocate_with_pname(
+    scene_renderer->gpu,
+    acceleration_structure_build_sizes_info.acceleration_structure_size,
+    CRUDE_GFX_MEMORY_TYPE_GPU,
+    "tlas_hga",
+    CRUDE_GFX_RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR );
+  
+  acceleration_structure_create_info = CRUDE_COMPOUNT_EMPTY( crude_gfx_rhi_acceleration_structure_create_info );
+  acceleration_structure_create_info.buffer = crude_gfx_access_buffer( scene_renderer->gpu, scene_renderer->tlas_hga.buffer_handle )->rhi_buffer;
+  acceleration_structure_create_info.size = acceleration_structure_build_sizes_info.acceleration_structure_size;
+  acceleration_structure_create_info.type = CRUDE_GFX_RHI_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+
+  crude_gfx_rhi_create_acceleration_structure( &scene_renderer->gpu->rhi_device, &acceleration_structure_create_info, &scene_renderer->rhi_tlas );
+  crude_gfx_rhi_set_acceleration_structure_debug_name( &scene_renderer->gpu->rhi_device, scene_renderer->rhi_tlas, "rhi_tlas" );
+
+  scene_renderer->tlas_scratch_hga = crude_gfx_memory_allocate_with_pname(
+    scene_renderer->gpu, 
+    acceleration_structure_build_sizes_info.build_scratch_size,
+    CRUDE_GFX_MEMORY_TYPE_GPU,
+    "tlas_scratch_hga",
+    CRUDE_GFX_RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR );
+
+  acceleration_build_geometry_info = CRUDE_COMPOUNT_EMPTY( crude_gfx_rhi_acceleration_structure_build_geometry_info );
+  acceleration_build_geometry_info.type = CRUDE_GFX_RHI_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+  acceleration_build_geometry_info.flags = CRUDE_GFX_RHI_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_BIT_KHR | CRUDE_GFX_RHI_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | CRUDE_GFX_RHI_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+  acceleration_build_geometry_info.mode = CRUDE_GFX_RHI_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+  acceleration_build_geometry_info.dst_acceleration_structure = scene_renderer->rhi_tlas;
+  acceleration_build_geometry_info.geometry_count = 1;
+  acceleration_build_geometry_info.geometries = &acceleration_structure_geometry;
+  acceleration_build_geometry_info.scratch_data.device_address = scene_renderer->tlas_scratch_hga.gpu_address;
+  
+  acceleration_structure_build_range_info = CRUDE_COMPOUNT_EMPTY( crude_gfx_rhi_acceleration_structure_build_range_info );
+  acceleration_structure_build_range_info.primitive_count = max_instance_count;
+  
+  crude_gfx_cmd_add_buffer_barrier( primary_cmd, scene_renderer->tlas_instances_hga.buffer_handle, CRUDE_GFX_RHI_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, CRUDE_GFX_RHI_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE );
+
+  crude_gfx_rhi_command_buffer_build_acceleration_structures(
+    &scene_renderer->gpu->rhi_device, scene_renderer->allocator,
+    primary_cmd->rhi_cmd_buffer,
+    1u,
+    &acceleration_build_geometry_info,
+    &acceleration_structure_build_range_info );
+
+  crude_gfx_cmd_add_buffer_barrier( primary_cmd, scene_renderer->tlas_instances_hga.buffer_handle, CRUDE_GFX_RHI_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, CRUDE_GFX_RHI_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE );
+
+  crude_stack_allocator_free_marker( scene_renderer->temporary_allocator, temporary_allocator_marker );
+}
+
+void
+crude_gfx_scene_renderer_update_top_level_acceleration_structure_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer,
+  _In_ crude_gfx_cmd_buffer                               *primary_cmd
+)
+{
+#if CRUDE_GFX_VULKAN_AVAILABLE
+  VkAccelerationStructureInstanceKHR                      *vk_acceleration_structure_instances;
+#endif
+  crude_gfx_buffer                                        *tlas_buffer;
+  crude_gfx_rhi_acceleration_structure_build_geometry_info acceleration_build_geometry_info;
+  crude_gfx_rhi_acceleration_structure_geometry            acceleration_structure_geometry;
+  crude_gfx_rhi_acceleration_structure_build_sizes_info    acceleration_structure_build_sizes_info;
+  crude_gfx_rhi_acceleration_structure_build_range_info    acceleration_structure_build_range_info;
+  uint64                                                   temporary_allocator_marker;
+  uint32                                                   max_instance_count;
+  
+  if ( CRUDE_RESOURCE_HANDLE_IS_INVALID( scene_renderer->tlas_hga.buffer_handle ) )
+  {
+    return;
+  }
+
+  temporary_allocator_marker = crude_stack_allocator_get_marker( scene_renderer->temporary_allocator );
+  
+  max_instance_count = 0u;
+
+  if ( crude_gfx_rhi_get_type( ) == CRUDE_GFX_RHI_TYPE_VULKAN )
+  {
+    CRUDE_ARRAY_INITIALIZE_WITH_CAPACITY( vk_acceleration_structure_instances, scene_renderer->total_visible_meshes_instances_count, crude_stack_allocator_pack( scene_renderer->temporary_allocator ) );
+    crude_gfx_scene_renderer_fill_top_level_acceleration_structures_instances_( scene_renderer, &vk_acceleration_structure_instances );
+  
+    max_instance_count = CRUDE_ARRAY_LENGTH( vk_acceleration_structure_instances );
+
+    crude_memory_copy( scene_renderer->tlas_instances_hga.cpu_address, vk_acceleration_structure_instances, sizeof( VkAccelerationStructureInstanceKHR ) * max_instance_count );
+  }
+  else if ( crude_gfx_rhi_get_type( ) != CRUDE_GFX_RHI_TYPE_NULL )
+  {
+    CRUDE_ASSERT( false );
+  }
+
+  acceleration_structure_geometry = CRUDE_COMPOUNT_EMPTY( crude_gfx_rhi_acceleration_structure_geometry );
+  acceleration_structure_geometry.geometry_type = CRUDE_GFX_RHI_GEOMETRY_TYPE_INSTANCES_KHR;
+  acceleration_structure_geometry.flags = CRUDE_GFX_RHI_GEOMETRY_OPAQUE_BIT_KHR;
+  acceleration_structure_geometry.geometry.instances.array_of_pointers = false;
+  acceleration_structure_geometry.geometry.instances.data.device_address = scene_renderer->tlas_instances_hga.gpu_address;
+
+  acceleration_build_geometry_info = CRUDE_COMPOUNT_EMPTY( crude_gfx_rhi_acceleration_structure_build_geometry_info );
+  acceleration_build_geometry_info.type = CRUDE_GFX_RHI_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+  acceleration_build_geometry_info.flags = CRUDE_GFX_RHI_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_BIT_KHR | CRUDE_GFX_RHI_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | CRUDE_GFX_RHI_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+  acceleration_build_geometry_info.mode = CRUDE_GFX_RHI_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+  acceleration_build_geometry_info.dst_acceleration_structure = scene_renderer->rhi_tlas;
+  acceleration_build_geometry_info.src_acceleration_structure = scene_renderer->rhi_tlas;
+  acceleration_build_geometry_info.geometry_count = 1;
+  acceleration_build_geometry_info.geometries = &acceleration_structure_geometry;
+  acceleration_build_geometry_info.scratch_data.device_address = scene_renderer->tlas_scratch_hga.gpu_address;
+
+  acceleration_structure_build_range_info = CRUDE_COMPOUNT_EMPTY( crude_gfx_rhi_acceleration_structure_build_range_info );
+  acceleration_structure_build_range_info.primitive_count = max_instance_count;
+
+  crude_gfx_cmd_add_buffer_barrier( primary_cmd, scene_renderer->tlas_instances_hga.buffer_handle, CRUDE_GFX_RHI_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, CRUDE_GFX_RHI_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE );
+
+  crude_gfx_rhi_command_buffer_build_acceleration_structures(
+    &scene_renderer->gpu->rhi_device, scene_renderer->allocator,
+    primary_cmd->rhi_cmd_buffer,
+    1u,
+    &acceleration_build_geometry_info,
+    &acceleration_structure_build_range_info );
+
+  crude_gfx_cmd_add_buffer_barrier( primary_cmd, scene_renderer->tlas_instances_hga.buffer_handle, CRUDE_GFX_RHI_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, CRUDE_GFX_RHI_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE );
+
+cleanup:
+  crude_stack_allocator_free_marker( scene_renderer->temporary_allocator, temporary_allocator_marker );
+}
+
+void
+crude_gfx_scene_renderer_create_acceleration_stucture_dsl_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+)
+{
+  crude_gfx_descriptor_set_layout_creation                 dsl_creation;
+  
+  dsl_creation = CRUDE_COMPOUNT_EMPTY( crude_gfx_descriptor_set_layout_creation );
+  dsl_creation.name = "acceleration_stucture_dsl";
+  dsl_creation.bindless = false;
+  dsl_creation.set_index = CRUDE_ACCELERATION_STRUCTURE_DESCRIPTOR_SET_INDEX;
+  crude_gfx_descriptor_set_layout_creation_add_binding( &dsl_creation, CRUDE_COMPOUNT( crude_gfx_descriptor_set_layout_binding, {
+    .type = CRUDE_GFX_RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+    .start = CRUDE_ACCELERATION_STRUCTURE_BINDING,
+    .count = 1u,
+  } ) );
+
+  scene_renderer->acceleration_stucture_dsl = crude_gfx_create_descriptor_set_layout( scene_renderer->gpu, &dsl_creation );
+}
+
+void
+crude_gfx_scene_renderer_create_acceleration_stucture_ds_
+(
+  _In_ crude_gfx_scene_renderer                           *scene_renderer
+)
+{
+  crude_gfx_descriptor_set_creation                        ds_creation;
+
+  if ( scene_renderer->acceleration_stucture_ds.index != CRUDE_GFX_DESCRIPTOR_SET_HANDLE_INVALID.index )
+  {
+    crude_gfx_destroy_descriptor_set( scene_renderer->gpu, scene_renderer->acceleration_stucture_ds );
+  }
+
+  ds_creation = crude_gfx_descriptor_set_creation_empty();
+  ds_creation.layout = scene_renderer->acceleration_stucture_dsl;
+  ds_creation.name = "acceleration_stucture_dsl";
+
+  crude_gfx_descriptor_set_creation_add_acceleration_structure( &ds_creation, scene_renderer->rhi_tlas, 0u );
+    
+  scene_renderer->acceleration_stucture_ds = crude_gfx_create_descriptor_set( scene_renderer->gpu, &ds_creation );
+}
+
+#endif /* CRUDE_GFX_RAY_TRACING_ENABLED */

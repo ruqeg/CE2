@@ -1,0 +1,590 @@
+
+#if defined( CRUDE_VALIDATOR_LINTING ) || defined( __cplusplus )
+#ifndef __cplusplus
+#extension GL_GOOGLE_include_directive : enable
+#endif
+//#define TRANSLUCENT_NO_CULL_CLASSIC
+#define OPAQUE_TERRAIN_MESHLET
+//#define OPAQUE_MESHLET
+//#define DEFERRED_CLASSIC
+//#define TRANSLUCENT_NO_CULL
+//#define CRUDE_STAGE_TASK
+#define CRUDE_STAGE_MESH
+//#define CRUDE_STAGE_VERTEX
+//#define CRUDE_STAGE_FRAGMENT
+#include "common/platform.h"
+#include "common/debug.h"
+#include "common/scene.h"
+#include "common/culling.h"
+#include "common/light.h"
+#endif /* CRUDE_VALIDATOR_LINTING || __cplusplus */
+
+#if defined( OPAQUE_MESHLET )
+CRUDE_PUSH_CONSTANT( crude_gfx_opaque_meshlet_pass_push_constant_ )
+{
+  SceneRef                                                 scene;
+  MeshDrawsRef                                             mesh_draws;
+
+  MeshInstancesDrawsRef                                    mesh_instance_draws;
+  MeshletsRef                                              meshlets;
+  
+  VerticesRef                                              vertices;
+  VerticesPositionsRef                                     vertices_positions;
+
+  VerticesJointsRef                                        vertices_joints;
+  TrianglesIndicesRef                                      triangles_indices;
+
+  VerticesIndicesRef                                       vertices_indices;
+  MeshDrawCountRef                                         visible_mesh_count;
+
+  MeshDrawCommandsRef                                      mesh_draw_commands;
+  DebugLinesVerticesRef                                    debug_line_vertices;
+
+  DebugCountsRef                                           debug_counts;
+  JointMatricesRef                                         joint_matrices;
+
+  CulledLightsRef                                          culled_lights;
+  CulledLightsWorldToTextureRef                            culled_lights_world_to_texture;
+};
+#if CRUDE_RAYTRACED_SHADOWS
+CRUDE_ACCELERATION_STRUCTURE_DEFINE( acceleration_structure );
+#endif /* CRUDE_RAYTRACED_SHADOWS */
+#endif /* OPAQUE_MESHLET */
+
+#if defined( OPAQUE_CLASSIC ) 
+CRUDE_PUSH_CONSTANT( crude_gfx_opaque_classic_pass_push_constant_ )
+{
+  SceneRef                                                 scene;
+  MeshDrawsRef                                             mesh_draws;
+
+  MeshInstancesDrawsRef                                    mesh_instance_draws;
+  MeshDrawCountRef                                         visible_mesh_count;
+
+  MeshDrawCommandsRef                                      mesh_draw_commands;
+  XMFLOAT2                                                 _padding;
+};
+#endif /* OPAQUE_CLASSIC */
+
+#if defined( TRANSLUCENT_NO_CULL_CLASSIC ) 
+CRUDE_PUSH_CONSTANT( crude_gfx_translucent_no_cull_classic_pass_push_constant_ )
+{
+  SceneRef                                                 scene;
+  MeshDrawsRef                                             mesh_draws;
+
+  MeshInstancesDrawsRef                                    mesh_instance_draws;
+  MeshDrawCountRef                                         visible_mesh_count;
+
+  MeshDrawCommandsRef                                      mesh_draw_commands;
+  CulledLightsZBinsRef                                     culled_zbins;
+
+  CulledLightsTilesRef                                     culled_lights_tiles;
+  CulledLightsIndicesRef                                   culled_lights_indices;
+
+  CulledLightsRef                                          culled_lights;
+  CulledLightsWorldToTextureRef                            culled_light_shadow_views;
+
+  float32                                                  inv_radiance_texture_width;
+  float32                                                  inv_radiance_texture_height;
+  XMFLOAT2                                                 _pust_constant_padding;
+};
+#endif /* TRANSLUCENT_NO_CULL_CLASSIC */
+
+#if defined( TRANSLUCENT_NO_CULL ) 
+CRUDE_PUSH_CONSTANT( crude_gfx_translucent_no_cull_pass_push_constant_ )
+{
+  SceneRef                                                 scene;
+  MeshDrawsRef                                             mesh_draws;
+
+  MeshInstancesDrawsRef                                    mesh_instance_draws;
+  MeshletsRef                                              meshlets;
+
+  VerticesRef                                              vertices;
+  VerticesPositionsRef                                     vertices_positions;
+
+  VerticesJointsRef                                        vertices_joints;
+  TrianglesIndicesRef                                      triangles_indices;
+
+  VerticesIndicesRef                                       vertices_indices;
+  MeshDrawCountRef                                         visible_mesh_count;
+
+  MeshDrawCommandsRef                                      mesh_draw_commands;
+  DebugLinesVerticesRef                                    debug_line_vertices;
+
+  DebugCountsRef                                           debug_counts;
+  JointMatricesRef                                         joint_matrices;
+
+  CulledLightsRef                                          culled_lights;
+  CulledLightsWorldToTextureRef                            culled_lights_world_to_texture;
+};
+#if CRUDE_RAYTRACED_SHADOWS
+CRUDE_ACCELERATION_STRUCTURE_DEFINE( acceleration_structure );
+#endif /* CRUDE_RAYTRACED_SHADOWS */
+#endif /* TRANSLUCENT_NO_CULL */
+
+#if defined( OPAQUE_TERRAIN_MESHLET )
+CRUDE_PUSH_CONSTANT( crude_gfx_opaque_terrain_meshlet_pass_push_constant_ )
+{
+  SceneRef                                                 scene;
+  MeshDrawsRef                                             mesh_draws;
+
+  MeshInstancesDrawsRef                                    mesh_instance_draws;
+  MeshletsRef                                              meshlets;
+  
+  VerticesRef                                              vertices;
+  VerticesPositionsRef                                     vertices_positions;
+
+  VerticesJointsRef                                        vertices_joints;
+  TrianglesIndicesRef                                      triangles_indices;
+
+  VerticesIndicesRef                                       vertices_indices;
+  MeshDrawCountRef                                         visible_mesh_count;
+
+  MeshDrawCommandsRef                                      mesh_draw_commands;
+  DebugLinesVerticesRef                                    debug_line_vertices;
+
+  DebugCountsRef                                           debug_counts;
+  JointMatricesRef                                         joint_matrices;
+
+  CulledLightsRef                                          culled_lights;
+  CulledLightsWorldToTextureRef                            culled_lights_world_to_texture;
+};
+#if CRUDE_RAYTRACED_SHADOWS
+CRUDE_ACCELERATION_STRUCTURE_DEFINE( acceleration_structure );
+#endif /* CRUDE_RAYTRACED_SHADOWS */
+#endif /* OPAQUE_TERRAIN_MESHLET */
+
+#ifndef __cplusplus
+
+#if defined( OPAQUE_MESHLET ) || defined ( TRANSLUCENT_NO_CULL ) 
+
+#extension GL_ARB_shader_draw_parameters : require
+#extension GL_KHR_shader_subgroup_ballot: require
+
+#if defined( CRUDE_STAGE_TASK ) || defined( CRUDE_STAGE_MESH )
+taskPayloadSharedEXT struct
+{
+  uint                                                     meshlet_indices[ 128 ];
+  uint                                                     mesh_instance_draw_indices[ 128 ];
+} shared_data;
+#endif
+
+#if defined( CRUDE_STAGE_TASK )
+
+layout(local_size_x=32) in;
+
+void main()
+{
+#if defined( OPAQUE_MESHLET )
+  uint draw_id = mesh_draw_commands.data[ gl_DrawIDARB ].draw_id;
+#else /* TRANSLUCENT_NO_CULL */
+  uint draw_id = mesh_draw_commands.data[ gl_DrawIDARB + visible_mesh_count.data.total_mesh_count ].draw_id;
+#endif
+  uint mesh_draw_index = mesh_instance_draws.data[ draw_id ].mesh_draw_index;
+  uint meshlet_index = mesh_draws.data[ mesh_draw_index ].meshletes_offset + gl_GlobalInvocationID.x;
+
+  if ( meshlet_index >= mesh_draws.data[ mesh_draw_index ].meshletes_offset + mesh_draws.data[ mesh_draw_index ].meshletes_count )
+  {
+    return;
+  }
+
+  mat4 mesh_to_world = mesh_instance_draws.data[ draw_id ].mesh_to_world;
+  vec4 world_center = vec4( meshlets.data[ meshlet_index ].center, 1 ) * mesh_to_world;
+  float scale = crude_calculate_scale_from_matrix( mat3( mesh_to_world ) );
+  float radius = meshlets.data[ meshlet_index ].radius * scale * 1.1;
+
+  vec3 cone_axis = vec3(
+    int( meshlets.data[ meshlet_index ].cone_axis[ 0 ] ) / 127.0,
+    int( meshlets.data[ meshlet_index ].cone_axis[ 1 ]) / 127.0,
+    int( meshlets.data[ meshlet_index ].cone_axis[ 2 ]) / 127.0 ) * mat3( mesh_to_world );
+  float cone_cutoff = int( meshlets.data[ meshlet_index ].cone_cutoff ) / 127.0;
+  
+  bool accept = true;
+
+#if defined( OPAQUE_MESHLET )
+  if ( ( mesh_instance_draws.data[ draw_id ].flags & CRUDE_GFX_MESH_INSTANCE_DRAW_FLAG_ANIMATED ) == 0)
+  {
+    accept = true;//!crude_clustered_backface_culling( world_center.xyz, radius, cone_axis, cone_cutoff, scene.data.camera.position );
+    
+    vec4 view_center = world_center * scene.data.camera.world_to_view;
+    
+    bool frustum_visible = accept && crude_frustum_culling( scene.data.camera, view_center.xyz, radius );
+    
+    bool occlusion_visible = false;
+    if ( frustum_visible )
+    {
+      occlusion_visible = crude_occlusion_culling( mesh_draw_index, view_center.xyz, radius, scene.data.camera.znear,
+        scene.data.camera.view_to_clip[ 0 ][ 0 ], scene.data.camera.view_to_clip[ 1 ][ 1 ],
+        visible_mesh_count.data.depth_pyramid_texture_index,
+        world_center.xyz, scene.data.camera.position, scene.data.camera.world_to_clip,
+        debug_line_vertices,
+        debug_counts
+      );
+    }
+    accept = occlusion_visible;
+  }
+#endif
+
+  uvec4 ballot = subgroupBallot( accept );
+  
+  uint previous_visible_meshlet_index = subgroupBallotExclusiveBitCount( ballot );
+  if ( accept )
+  {
+    shared_data.meshlet_indices[ previous_visible_meshlet_index ] = meshlet_index;
+    shared_data.mesh_instance_draw_indices[ previous_visible_meshlet_index ] = draw_id;
+  }
+  
+  uint visible_meslets_count = subgroupBallotBitCount( ballot );
+  if ( gl_LocalInvocationID.x == 0 )
+  {
+    EmitMeshTasksEXT( visible_meslets_count, 1, 1 );
+  }
+}
+#endif /* CRUDE_STAGE_TASK */
+
+#if defined( CRUDE_STAGE_MESH )
+layout(local_size_x=64, local_size_y=1, local_size_z=1) in;
+layout(triangles) out;
+layout(max_vertices=CRUDE_GFX_MESHLET_MAX_VERTICES, max_primitives=CRUDE_GFX_MESHLET_MAX_TRIANGLES) out;
+
+layout(location=0) out vec2 out_texcoord[];
+layout(location=1) out vec3 out_normals[];
+layout(location=2) out vec3 out_tangents[];
+layout(location=3) out vec3 out_bitangents[];
+layout(location=4) out vec3 out_world_positions[];
+layout(location=5) out vec3 out_view_surface_normal[];
+layout(location=6) out vec3 out_view_position[];
+layout(location=7) out flat uint out_mesh_draw_index[];
+
+void main()
+{
+  uint task_index = gl_LocalInvocationID.x;
+  uint local_meshlet_index = gl_WorkGroupID.x;
+  uint global_meshlet_index = shared_data.meshlet_indices[ local_meshlet_index ];
+  uint mesh_instance_draw_index = shared_data.mesh_instance_draw_indices[ local_meshlet_index ];
+  uint mesh_draw_index = mesh_instance_draws.data[ mesh_instance_draw_index ].mesh_draw_index;
+  
+  uint mesh_index = meshlets.data[ global_meshlet_index ].mesh_index;
+  uint vertices_count = uint( meshlets.data[ global_meshlet_index ].vertices_count );
+  uint triangles_count = uint( meshlets.data[ global_meshlet_index ].triangles_count );
+  
+  uint vertices_offset = meshlets.data[ global_meshlet_index ].vertices_offset;
+  uint triangles_offset = meshlets.data[ global_meshlet_index ].triangles_offset;
+
+  mat4 mesh_to_world = mesh_instance_draws.data[ mesh_instance_draw_index ].mesh_to_world;
+  
+  // remove if
+  if ( gl_LocalInvocationID.x == 0 )
+  {
+    SetMeshOutputsEXT( vertices_count, triangles_count );
+  }
+
+  float i8_inverse = 1.0 / 127.0;
+  for ( uint i = task_index; i < vertices_count; i += gl_WorkGroupSize.x )
+  {
+    uint vertex_index = vertices_indices.data[ i + vertices_offset ];
+    
+    vec4 mesh_position = vec4( vertices_positions.data[ vertex_index ], 1.0 );
+    mat4 mesh_to_skin = crude_calculate_mesh_to_skin( vertex_index, vertices_joints, joint_matrices, mesh_instance_draws.data[ mesh_instance_draw_index ] );
+    vec4 skin_position = mesh_position * mesh_to_skin;
+    vec4 world_position = skin_position * mesh_to_world;
+
+    vec4 view_position = world_position * scene.data.camera.world_to_view;
+    
+    vec4 tangent = vec4( int( vertices.data[ vertex_index ].tx ), int( vertices.data[ vertex_index ].ty ), int( vertices.data[ vertex_index ].tz ),  int( vertices.data[ vertex_index ].tw ) ) * i8_inverse - 1.0;
+    vec3 normal = vec3( int( vertices.data[ vertex_index ].nx ), int( vertices.data[ vertex_index ].ny ), int( vertices.data[ vertex_index ].nz ) ) * i8_inverse - 1.0;
+    normal = normal * mat3( mesh_to_skin ) * mat3( mesh_to_world );
+    tangent.xyz = tangent.xyz * mat3( mesh_to_skin ) * mat3( mesh_to_world );
+    vec3 bitangent = cross( normal, tangent.xyz ) * tangent.w;
+
+    vec3 view_normal = normal * mat3( scene.data.camera.world_to_view );
+
+    gl_MeshVerticesEXT[ i ].gl_Position = world_position * scene.data.camera.world_to_clip;
+    out_texcoord[ i ] = vec2( vertices.data[ vertex_index ].tu, vertices.data[ vertex_index ].tv );
+    out_normals[ i ] = normal;
+    out_tangents[ i ] = tangent.xyz;
+    out_bitangents[ i ] = bitangent;
+    out_world_positions[ i ] = world_position.xyz;
+    out_view_surface_normal[ i ] = view_normal;
+    out_view_position[ i ] = view_position.xyz;
+    out_mesh_draw_index[ i ] = mesh_draw_index;
+  }
+  
+  for ( uint i = task_index; i < triangles_count; i += gl_WorkGroupSize.x )
+  {
+    uint triangle_index = uint( 3 * i + triangles_offset );
+    gl_PrimitiveTriangleIndicesEXT[ i ] = uvec3( triangles_indices.data[ triangle_index ], triangles_indices.data[ triangle_index + 1 ], triangles_indices.data[ triangle_index + 2 ] );
+  }
+}
+#endif /* CRUDE_STAGE_MESH */
+#endif /* OPAQUE_MESHLET || TRANSLUCENT_NO_CULL */
+
+#if defined( OPAQUE_TERRAIN_MESHLET ) 
+
+#extension GL_ARB_shader_draw_parameters : require
+#extension GL_KHR_shader_subgroup_ballot: require
+
+#define CLUSTER_GRID_SIZE 9
+#define CLUSTER_PRIMITIVES_IN_COL ( 2 * CLUSTER_GRID_SIZE - 2 )
+#define CLUSTER_VERTICES_COUNT ( CLUSTER_GRID_SIZE * CLUSTER_GRID_SIZE )
+#define CLUSTER_PRIMITIVES_COUNT 128
+
+//#if defined( CRUDE_STAGE_TASK ) || defined( CRUDE_STAGE_MESH )
+//taskPayloadSharedEXT struct
+//{
+//} shared_data;
+//#endif
+
+#if defined( CRUDE_STAGE_TASK )
+
+layout(local_size_x=32) in;
+
+void main()
+{
+  EmitMeshTasksEXT( 1, 1, 1 );
+}
+#endif /* CRUDE_STAGE_TASK */
+
+#if defined( CRUDE_STAGE_MESH )
+layout(local_size_x=64, local_size_y=1, local_size_z=1) in;
+layout(triangles) out;
+layout(max_vertices=81, max_primitives=128) out;
+
+layout(location=0) out vec2 out_texcoord[];
+layout(location=1) out vec3 out_normals[];
+layout(location=2) out vec3 out_tangents[];
+layout(location=3) out vec3 out_bitangents[];
+layout(location=4) out vec3 out_world_positions[];
+layout(location=5) out vec3 out_view_surface_normal[];
+layout(location=6) out vec3 out_view_position[];
+layout(location=7) out flat uint out_mesh_draw_index[];
+
+void main()
+{
+  SetMeshOutputsEXT( CLUSTER_VERTICES_COUNT, CLUSTER_PRIMITIVES_COUNT );
+  
+  for ( uint i = gl_LocalInvocationID.x; i < CLUSTER_VERTICES_COUNT; i += gl_WorkGroupSize.x )
+  {
+    vec3                                                   vertex;
+    
+    vertex.x = i / CLUSTER_GRID_SIZE;
+    vertex.y = 0;
+    vertex.z = i % CLUSTER_GRID_SIZE;
+    
+    gl_MeshVerticesEXT[ i ].gl_Position = vec4( vertex, 1 ) * scene.data.camera.world_to_clip;
+  }
+  
+  for ( uint i = gl_LocalInvocationID.x; i < CLUSTER_PRIMITIVES_COUNT / 2; i += gl_WorkGroupSize.x )
+  {
+    uint row = i / ( CLUSTER_GRID_SIZE - 1 );
+    uint col = i % ( CLUSTER_GRID_SIZE - 1 );
+
+    uint v0 = row * CLUSTER_GRID_SIZE + col;
+
+    gl_PrimitiveTriangleIndicesEXT[ 2 * i + 0 ] = uvec3( v0, v0 + 1, v0 + CLUSTER_GRID_SIZE );
+    gl_PrimitiveTriangleIndicesEXT[ 2 * i + 1 ] = uvec3( v0 + 1, v0 + CLUSTER_GRID_SIZE + 1, v0 + CLUSTER_GRID_SIZE );
+  }
+}
+#endif /* CRUDE_STAGE_MESH */
+#endif /* OPAQUE_TERRAIN_MESHLET */
+
+#if defined( DEFERRED_CLASSIC ) || defined( TRANSLUCENT_NO_CULL_CLASSIC )
+#if defined( CRUDE_STAGE_VERTEX )
+
+layout(location=0) out vec2 out_texcoord;
+layout(location=1) out vec3 out_normal;
+layout(location=2) out vec3 out_tangent;
+layout(location=3) out vec3 out_bitangent;
+layout(location=4) out vec3 out_world_position;
+layout(location=5) out vec3 out_view_surface_normal;
+layout(location=6) out vec3 out_view_position;
+
+void main()
+{
+#if defined( DEFERRED_CLASSIC )
+  uint draw_id = mesh_draw_commands.data[ gl_DrawIDARB ].draw_id;
+#else /* TRANSLUCENT_NO_CULL_CLASSIC */
+  uint draw_id = mesh_draw_commands.data[ gl_DrawIDARB + visible_mesh_count.data.total_mesh_count ].draw_id;
+#endif
+  uint mesh_draw_index = mesh_instance_draws.data[ draw_id ].mesh_draw_index;
+  crude_gfx_mesh_draw mesh_draw = mesh_draws.data[ mesh_draw_index ];
+
+  mat4 mesh_to_world = mesh_instance_draws.data[ draw_id ].mesh_to_world;
+
+  uint vertex_index = 0;
+  if ( ( ( mesh_draw.flags & CRUDE_MESH_DRAW_FLAGS_INDEX_16 ) == 0 ) )
+  {
+    vertex_index = MeshIndices32Ref( mesh_draw.index_buffer ).data[ gl_VertexIndex ];
+  }
+  else
+  {
+    vertex_index = MeshIndices16Ref( mesh_draw.index_buffer ).data[ gl_VertexIndex ];
+  }
+
+  vec4 model_position = vec4(
+    mesh_draw.position_buffer.data[ vertex_index + 0 ],
+    1.0 );
+  vec4 world_position = model_position * mesh_to_world;
+  vec4 view_position = world_position * scene.data.camera.world_to_view;
+  
+  vec4 tangent = ( ( mesh_draw.flags & CRUDE_MESH_DRAW_FLAGS_HAS_TANGENTS ) == 1 ) ? vec4(
+    mesh_draw.tangent_buffer.data[ vertex_index + 0 ]) : vec4( 0 );
+  vec3 normal = ( ( mesh_draw.flags & CRUDE_MESH_DRAW_FLAGS_HAS_NORMAL ) == 1 ) ? vec3(
+    mesh_draw.normal_buffer.data[ vertex_index ] ) : vec3( 0 );
+  normal = normal * mat3( mesh_to_world );
+  tangent.xyz = tangent.xyz * mat3( mesh_to_world );
+  vec3 bitangent = cross( normal, tangent.xyz ) * tangent.w;
+  vec3 view_normal = normal * mat3( scene.data.camera.world_to_view );
+
+  gl_Position = world_position * scene.data.camera.world_to_clip;
+  out_texcoord = mesh_draw.texcoord_buffer.data[ vertex_index ];
+  out_normal = normal;
+  out_tangent = tangent.xyz;
+  out_bitangent = bitangent;
+  out_world_position = world_position.xyz;
+  out_view_surface_normal = view_normal;
+  out_view_position = scene.data.camera.position - world_position.xyz;
+}
+#endif /* CRUDE_STAGE_VERTEX */
+#endif /* DEFERRED_CLASSIC || TRANSLUCENT_NO_CULL_CLASSIC */
+
+#if defined( OPAQUE_MESHLET ) || defined( DEFERRED_CLASSIC ) || defined( OPAQUE_TERRAIN_MESHLET )
+#if defined( CRUDE_STAGE_FRAGMENT )
+
+layout(location = 0) out vec4 out_direct_radiance;
+layout(location = 1) out vec2 out_packed_normal;
+layout(location = 2) out vec4 out_albedo;
+
+layout(location=0) in vec2 in_texcoord0;
+layout(location=1) in vec3 in_normal;
+layout(location=2) in vec3 in_tangent;
+layout(location=3) in vec3 in_bitangent;
+layout(location=4) in vec3 in_world_position;
+layout(location=5) in vec3 in_view_surface_normal;
+layout(location=6) in vec3 in_view_position;
+layout(location=7) in flat uint in_mesh_draw_index;
+
+void main()
+{
+  crude_gfx_mesh_draw mesh_draw = mesh_draws.data[ in_mesh_draw_index ];
+
+  vec4 albedo = mesh_draw.albedo_color_factor;
+  if ( mesh_draw.textures.x != CRUDE_SHADER_TEXTURE_UNDEFINED )
+  {
+    albedo = pow( texture( global_textures[ nonuniformEXT( mesh_draw.textures.x ) ], in_texcoord0 ) * albedo, vec4( 2.2 ) );
+  }
+
+  vec2 roughness_metalness = mesh_draw.metallic_roughness_occlusion_factor.yx;
+  if ( mesh_draw.textures.y != CRUDE_SHADER_TEXTURE_UNDEFINED )
+  {
+    roughness_metalness = texture( global_textures[ nonuniformEXT( mesh_draw.textures.y ) ], in_texcoord0 ).rg;
+  }
+  
+#if CRUDE_DEVELOP
+  roughness_metalness = vec2( crude_scene_force_roughness( scene ) ? scene.data.debug_force_roughness : roughness_metalness.x, crude_scene_force_metalness( scene ) ? scene.data.debug_force_metalness : roughness_metalness.y );
+#else 
+  roughness_metalness = vec2( roughness_metalness.x, roughness_metalness.y );
+#endif
+  vec3 normal = normalize( in_normal );
+  vec3 tangent = normalize( in_tangent );
+  vec3 bitangent = normalize( in_bitangent );
+
+  crude_calculate_geometric_tbn( normal, tangent, bitangent, in_texcoord0, in_world_position, mesh_draw.flags );
+
+  if ( mesh_draw.textures.z != CRUDE_SHADER_TEXTURE_UNDEFINED )
+  {
+    const vec3 bump_normal = normalize( texture( global_textures[ nonuniformEXT( mesh_draw.textures.z ) ], in_texcoord0 ).rgb * 2.0 - 1.0 );
+    const mat3 tbn = mat3( tangent, bitangent, normal );
+    normal = normalize( tbn * normalize( bump_normal ) );
+  }
+
+  float depth = gl_FragCoord.z;
+  
+  vec3 direct_radiance = vec3( 0.f, 0.f, 0.f );
+  if ( depth != 1.f )
+  {
+    direct_radiance = crude_calculate_lighting(
+#if CRUDE_RAYTRACED_SHADOWS
+      acceleration_structure,
+#endif /* CRUDE_RAYTRACED_SHADOWS */
+      albedo, roughness_metalness.x, roughness_metalness.y, normal, in_world_position, scene.data.camera.position, scene, culled_lights, culled_lights_world_to_texture );
+  }
+  else
+  {
+    direct_radiance = scene.data.background_radiance;
+  }
+
+  direct_radiance += mesh_draw.emissive.xyz * mesh_draw.emissive.w;
+
+  out_direct_radiance = vec4( direct_radiance, 1.f );
+  out_packed_normal = crude_octahedral_encode( in_normal );
+  out_albedo = albedo;
+}
+
+#endif /* CRUDE_STAGE_FRAGMENT */
+#endif /* OPAQUE_MESHLET || DEFERRED_CLASSIC || OPAQUE_TERRAIN_MESHLET */
+
+#if defined( TRANSLUCENT_NO_CULL ) || defined( TRANSLUCENT_NO_CULL_CLASSIC )
+#if defined( CRUDE_STAGE_FRAGMENT )
+
+layout(location = 0) out vec4 out_radiance;
+
+layout(location=0) in vec2 in_texcoord0;
+layout(location=1) in vec3 in_normal;
+layout(location=2) in vec3 in_tangent;
+layout(location=3) in vec3 in_bitangent;
+layout(location=4) in vec3 in_world_position;
+layout(location=5) in vec3 in_view_surface_normal;
+layout(location=6) in vec3 in_view_position;
+layout(location=7) in flat uint in_mesh_draw_index;
+
+void main()
+{
+  crude_gfx_mesh_draw mesh_draw = mesh_draws.data[ in_mesh_draw_index ];
+
+  vec4 albedo = mesh_draw.albedo_color_factor;
+  if ( mesh_draw.textures.x != CRUDE_SHADER_TEXTURE_UNDEFINED )
+  {
+    albedo = pow( texture( global_textures[ nonuniformEXT( mesh_draw.textures.x ) ], in_texcoord0 ) * albedo, vec4( 2.2 ) );
+  }
+
+  vec2 roughness_metalness = mesh_draw.metallic_roughness_occlusion_factor.yx;
+  if ( mesh_draw.textures.y != CRUDE_SHADER_TEXTURE_UNDEFINED )
+  {
+    roughness_metalness = texture( global_textures[ nonuniformEXT( mesh_draw.textures.y ) ], in_texcoord0 ).gb;
+  }
+  
+  vec3 normal = normalize( in_normal );
+  vec3 tangent = normalize( in_tangent );
+  vec3 bitangent = normalize( in_bitangent );
+
+  crude_calculate_geometric_tbn( normal, tangent, bitangent, in_texcoord0, in_world_position, mesh_draw.flags );
+
+  if ( mesh_draw.textures.z != CRUDE_SHADER_TEXTURE_UNDEFINED )
+  {
+    const vec3 bump_normal = normalize( texture( global_textures[ nonuniformEXT( mesh_draw.textures.z ) ], in_texcoord0 ).rgb * 2.0 - 1.0 );
+    const mat3 tbn = mat3( tangent, bitangent, normal );
+    normal = normalize( tbn * normalize( bump_normal ) );
+  }
+
+  float depth = gl_FragCoord.z;
+  
+  vec3 radiance = vec3( 0.f, 0.f, 0.f );
+  if ( depth != 1.f )
+  {
+    radiance = crude_calculate_lighting( 
+#if CRUDE_RAYTRACED_SHADOWS
+      acceleration_structure,
+#endif /* CRUDE_RAYTRACED_SHADOWS */
+      albedo, roughness_metalness.x, roughness_metalness.y, normal, in_world_position, scene.data.camera.position, scene, culled_lights, culled_lights_world_to_texture );
+  }
+  else
+  {
+    radiance = scene.data.background_radiance;
+  }
+
+  out_radiance = vec4( radiance, sqrt( albedo.a ) );
+}
+
+#endif /* CRUDE_STAGE_FRAGMENT */
+#endif /* TRANSLUCENT_NO_CULL */
+#endif /* __cplusplus */

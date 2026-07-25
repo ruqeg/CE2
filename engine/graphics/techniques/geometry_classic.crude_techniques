@@ -1,0 +1,69 @@
+{
+  "name" : "geometry",
+  "buffers": [
+    {
+      "name": "geometry",
+      "filename": "geometry.crude_shader",
+      "includes": [
+        "common/platform.h",
+        "common/debug.h",
+        "common/scene.h",
+        "common/culling.h",
+        "common/light.h"
+      ]
+    }
+  ],
+  "pipelines" : [
+    {
+      "name" : "opaque_classic",
+      "render_pass_output":
+      {
+        "reference": "opaque_early_pass" 
+      },
+      "depth" : {
+        "write" : 1,
+        "test" : "less_or_equal"
+      },
+      "cull" : "back",
+      "shaders" : [
+        {
+          "stage" : "vertex",
+          "buffer" : "geometry"
+        },
+        {
+          "stage" : "fragment",
+          "buffer" : "geometry"
+        }
+      ]
+    },
+    {
+      "name" : "translucent_no_cull_classic",
+      "render_pass_output":
+      {
+        "reference": "translucent_pass" 
+      },
+      "depth" : {
+        "write" : 0,
+        "test" : "less_or_equal"
+      },
+          "blend": [
+              {
+            "enable": 1,
+            "src_colour": "SRC_ALPHA",
+            "dst_colour": "ONE_MINUS_SRC_ALPHA",
+            "op": "ADD"
+              }
+          ],
+      "shaders" : [
+        {
+          "stage" : "vertex",
+          "buffer" : "geometry"
+        },
+        {
+          "stage" : "fragment",
+          "buffer" : "geometry"
+        }
+      ]
+    }
+  ]
+}

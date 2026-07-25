@@ -1,0 +1,347 @@
+#include <thirdparty/cJSON/cJSON.h>
+
+#include <engine/core/assert.h>
+#include <engine/core/file.h>
+#include <engine/core/string.h>
+#include <engine/core/array.h>
+#include <engine/scene/scene_ecs.h>
+#include <engine/physics/physics_ecs.h>
+#include <engine/scene/scripts/free_camera_ecs.h>
+#include <engine/graphics/scene_renderer.h>
+
+#include <engine/scene/node_manager.h>
+
+static crude_entity
+crude_node_manager_load_node_from_json_
+(
+  _In_ crude_node_manager                                 *manager,
+  _In_ cJSON                                              *json,
+  _In_ crude_ecs                                          *world,
+  _In_opt_ crude_entity                                   *parent
+);
+
+static cJSON*
+crude_node_manager_parse_json_
+(
+  _In_ crude_node_manager                                 *manager,
+  _In_ char const                                         *absolute_filepath
+);
+
+static cJSON*
+crude_node_manager_node_to_json_hierarchy_
+(
+  _In_ crude_node_manager                                 *manager,
+  _In_ crude_ecs                                          *world,
+  _In_ crude_entity                                        node
+);
+
+void
+crude_node_manager_initialize
+(
+  _In_ crude_node_manager                                 *manager,
+  _In_ crude_node_manager_creation const                  *creation
+)
+{
+  manager->physics_manager = creation->physics_manager;
+  manager->temporary_allocator = creation->temporary_allocator;
+  manager->components_serialization_manager = creation->components_serialization_manager;
+  manager->resources_absolute_directory = creation->resources_absolute_directory;
+  manager->model_renderer_resources_manager = creation->model_renderer_resources_manager;
+  manager->allocator = creation->allocator;
+  manager->select_camera_func = creation->select_camera_func;
+  manager->select_camera_ctx = creation->select_camera_ctx;
+  manager->audio_device = creation->audio_device;
+  manager->scene_renderer = creation->scene_renderer;
+
+  CRUDE_HASHMAPSTR_INITIALIZE( manager->relative_filepath_to_node_json, crude_heap_allocator_pack( manager->allocator ) );
+  crude_string_buffer_initialize( &manager->absolute_filepath_string_buffer, CRUDE_RMEGA( 1 ), crude_heap_allocator_pack( manager->allocator ) );
+}
+
+void
+crude_node_manager_deinitialize
+(
+  _In_ crude_node_manager                                 *manager
+)
+{
+  crude_node_manager_clear( manager );
+  crude_string_buffer_deinitialize( &manager->absolute_filepath_string_buffer );
+  CRUDE_HASHMAPSTR_DEINITIALIZE( manager->relative_filepath_to_node_json );
+}
+
+void
+crude_node_manager_clear
+(
+  _In_ crude_node_manager                                 *manager
+)
+{
+  for ( uint32 i = 0; i < CRUDE_HASHMAPSTR_CAPACITY( manager->relative_filepath_to_node_json ); ++i )
+  {
+    if ( crude_hashmapstr_backet_key_hash_valid( manager->relative_filepath_to_node_json[ i ].key.key_hash ) )
+    {
+      cJSON_Delete( manager->relative_filepath_to_node_json[ i ].value.json );
+    }
+    manager->relative_filepath_to_node_json[ i ].key.key_hash = CRUDE_HASHMAPSTR_BACKET_STATE_EMPTY;
+  }
+}
+
+crude_entity
+crude_node_manager_create_node
+(
+  _In_ crude_node_manager                                 *manager,
+  _In_ char const                                          node_realtive_filepath[ CRUDE_NODE_RELATIVE_FILEPATH_LENGTH_MAX ],
+  _In_ crude_ecs                                          *world
+)
+{
+  char const                                              *node_absolute_filepath;
+  crude_node_manager_node_json                            *node_json;
+  int64                                                    node_index;
+  crude_node_manager_node_json                             new_node_json;
+
+  crude_string_buffer_clear( &manager->absolute_filepath_string_buffer );
+  node_absolute_filepath = crude_string_buffer_append_use_f( &manager->absolute_filepath_string_buffer, "%s%s", manager->resources_absolute_directory, node_realtive_filepath );
+
+  node_index = CRUDE_HASHMAPSTR_GET_INDEX( manager->relative_filepath_to_node_json, node_realtive_filepath );
+  if ( node_index == -1 )
+  {
+    new_node_json.json = crude_node_manager_parse_json_( manager, node_absolute_filepath );
+    crude_string_copy( new_node_json.relative_filepath, node_realtive_filepath, sizeof( new_node_json.relative_filepath ) );
+
+    CRUDE_HASHMAPSTR_SET( manager->relative_filepath_to_node_json, CRUDE_COMPOUNT( crude_string_link, { new_node_json.relative_filepath } ), new_node_json );
+    node_json = &new_node_json;
+  }
+  else 
+  {
+    node_json = &manager->relative_filepath_to_node_json[ node_index ].value;
+  }
+
+  return crude_node_manager_load_node_from_json_( manager, node_json->json, world, NULL );
+}
+
+void
+crude_node_manager_save_node_to_file
+(
+  _In_ crude_node_manager                                 *manager,
+  _In_ crude_ecs                                          *world,
+  _In_ crude_entity                                        node,
+  _In_ char const                                          saved_relative_filepath[ CRUDE_NODE_RELATIVE_FILEPATH_LENGTH_MAX ]
+)
+{
+  char const                                              *saved_absolute_filepath;
+  cJSON                                                   *node_json;
+  char const                                              *node_str;
+  
+  crude_string_buffer_clear( &manager->absolute_filepath_string_buffer );
+  saved_absolute_filepath = crude_string_buffer_append_use_f( &manager->absolute_filepath_string_buffer, "%s%s", manager->resources_absolute_directory, saved_relative_filepath );
+
+  node_json = crude_node_manager_node_to_json_hierarchy_( manager, world, node );
+  node_str = cJSON_Print( node_json );
+  crude_write_file( saved_absolute_filepath, node_str, crude_string_length( node_str ) ); // TODO
+  cJSON_Delete( node_json );
+}
+
+crude_entity
+crude_node_manager_load_node_from_json_
+(
+  _In_ crude_node_manager                                 *manager,
+  _In_ cJSON                                              *node_json,
+  _In_ crude_ecs                                          *world,
+  _In_opt_ crude_entity                                   *parent
+)
+{
+  crude_entity                                             node;
+  char const                                              *node_name;
+  bool                                                     is_node_external;
+  bool                                                     copy_components;
+  
+  node_name = cJSON_GetStringValue( cJSON_GetObjectItemCaseSensitive( node_json, "name") );
+
+  copy_components = true;
+
+  is_node_external = cJSON_HasObjectItem( node_json, "external" );
+  if ( is_node_external )
+  {
+    cJSON                                                 *node_external_json;
+    char const                                            *node_external_relative_filepath;
+    crude_node_external                                    node_external_component;
+
+    CRUDE_ASSERT( parent ); /* WTF IS GOING ONE, DONT PUT EXTERNAL ON TOP OF SCENE */
+
+    node_external_json = cJSON_GetObjectItemCaseSensitive( node_json, "external");
+    node_external_relative_filepath = cJSON_GetStringValue( cJSON_GetObjectItemCaseSensitive( node_external_json, "relative_filepath" ) );
+    
+    node_external_component = crude_node_external_empty( );
+    node_external_component.type = CRUDE_CAST( crude_node_external_type, cJSON_GetNumberValue( cJSON_GetObjectItemCaseSensitive( node_external_json, "type") ) );
+    crude_string_copy( node_external_component.node_relative_filepath, node_external_relative_filepath, sizeof( node_external_component.node_relative_filepath ) );
+    node = crude_node_manager_create_node( manager, node_external_relative_filepath, world );
+    crude_entity_set_name( world, node, node_name );
+    crude_entity_set_parent( world, node, *parent );
+
+    if ( node_external_component.type == CRUDE_NODE_EXTERNAL_TYPE_REFERENCE )
+    {
+      copy_components = false;
+    }
+    
+    CRUDE_ENTITY_SET_COMPONENT( world, node, crude_node_external, { node_external_component } );
+  }
+  else
+  {
+    node = crude_entity_create_empty( world, node_name );
+    
+    if ( parent )
+    {
+      crude_entity_set_parent( world, node, *parent );
+    }
+  }
+  
+  if ( !is_node_external )
+  {
+    cJSON                                                 *children_json;
+    cJSON                                                 *child_json;
+  
+    children_json = cJSON_GetObjectItemCaseSensitive( node_json, "children" );
+    for ( uint32 child_index = 0; child_index < cJSON_GetArraySize( children_json ); ++child_index )
+    {
+      child_json = cJSON_GetArrayItem( children_json, child_index );
+      crude_entity child_node = crude_node_manager_load_node_from_json_( manager, child_json, world, &node );
+    }
+  }
+
+  if ( copy_components )
+  {
+    cJSON const                                           *node_components_json;
+  
+    node_components_json = cJSON_GetObjectItemCaseSensitive( node_json, "components" );
+
+    for ( uint32 component_index = 0; component_index < cJSON_GetArraySize( node_components_json ); ++component_index )
+    {
+      cJSON const                                       *component_json;
+      cJSON const                                       *component_type_json;
+      char const                                        *component_type;
+
+      component_json = cJSON_GetArrayItem( node_components_json, component_index );
+      component_type_json = cJSON_GetObjectItemCaseSensitive( component_json, "type" );
+      component_type = cJSON_GetStringValue( component_type_json );
+  
+      int64 index = CRUDE_HASHMAPSTR_GET_INDEX( manager->components_serialization_manager->component_name_to_json_funs, component_type );
+      CRUDE_ASSERT( index != -1 );
+      manager->components_serialization_manager->component_name_to_json_funs[ index ].value( world, node, component_json, manager );
+    }
+  }
+
+  return node;
+}
+
+cJSON*
+crude_node_manager_parse_json_
+(
+  _In_ crude_node_manager                                 *manager,
+  _In_ char const                                         *absolute_filepath
+)
+{
+  cJSON                                                 *json;
+  uint8                                                 *json_buffer;
+  uint32                                                 json_buffer_size;
+  uint32                                                 temporary_allocator_marker;
+  
+  temporary_allocator_marker = crude_stack_allocator_get_marker( manager->temporary_allocator );
+
+  json = NULL;
+
+  if ( !crude_file_exist( absolute_filepath ) )
+  {
+    CRUDE_LOG_ERROR( CRUDE_CHANNEL_GRAPHICS, "Cannot find a file \"%s\" to parse scene", absolute_filepath );
+    goto cleanup;
+  }
+  
+  crude_read_file( absolute_filepath, crude_stack_allocator_pack( manager->temporary_allocator ), &json_buffer, &json_buffer_size );
+  
+  json = cJSON_ParseWithLength( CRUDE_REINTERPRET_CAST( char const*, json_buffer ), json_buffer_size );
+  if ( !json )
+  {
+    CRUDE_LOG_ERROR( CRUDE_CHANNEL_GRAPHICS, "Cannot parse a file for scene... Error %s", cJSON_GetErrorPtr() );
+    goto cleanup;
+  }
+
+cleanup:
+  crude_stack_allocator_free_marker( manager->temporary_allocator, temporary_allocator_marker );
+  return json;
+}
+
+cJSON*
+crude_node_manager_node_to_json_hierarchy_
+(
+  _In_ crude_node_manager                                 *manager,
+  _In_ crude_ecs                                          *world,
+  _In_ crude_entity                                        node
+)
+{
+  cJSON                                                   *node_json;
+  bool                                                     is_external_node, is_gltf_node, export_components;
+  
+  is_external_node = is_gltf_node = false;
+
+  node_json = cJSON_CreateObject( );
+  
+  cJSON_AddItemToObject( node_json, "name", cJSON_CreateString( crude_entity_get_name( world, node ) ) );
+
+  export_components = true;
+
+  is_external_node = CRUDE_ENTITY_HAS_COMPONENT( world, node, crude_node_external );
+  if ( is_external_node )
+  {
+    crude_node_external const                             *node_external;
+    cJSON                                                 *node_external_json;
+
+    node_external = CRUDE_ENTITY_GET_IMMUTABLE_COMPONENT( world, node, crude_node_external );
+    
+    node_external_json = cJSON_AddObjectToObject( node_json, "external" );
+    cJSON_AddItemToObject( node_external_json, "relative_filepath", cJSON_CreateString( node_external->node_relative_filepath ) );
+    cJSON_AddItemToObject( node_external_json, "type", cJSON_CreateNumber( node_external->type ) );
+
+    if ( node_external->type != CRUDE_NODE_EXTERNAL_TYPE_COPY )
+    {
+      export_components = false;
+    }
+  }
+  
+  if ( export_components )
+  {
+    cJSON                                                 *node_components_json;
+
+    node_components_json = cJSON_AddArrayToObject( node_json, "components" );
+    
+    for ( uint32 i = 0; i < CRUDE_HASHMAP_CAPACITY( manager->components_serialization_manager->component_id_to_json_funs ); ++i )
+    {
+      if ( crude_hashmap_backet_key_valid( manager->components_serialization_manager->component_id_to_json_funs[ i ].key ) )
+      {
+        cJSON* component_json = manager->components_serialization_manager->component_id_to_json_funs[ i ].value( world, node, manager );
+        if ( component_json )
+        {
+          cJSON_AddItemToArray( node_components_json, component_json );
+        }
+      }
+    }
+  }
+  
+  if ( !is_gltf_node && !is_external_node )
+  {
+    cJSON                                                 *children_json;
+    ecs_iter_t                                             it;
+
+    children_json = cJSON_AddArrayToObject( node_json, "children" );
+    
+    it = crude_ecs_children( world, node );
+    while ( ecs_children_next( &it ) )
+    {
+      for ( size_t i = 0; i < it.count; ++i )
+      {
+        crude_entity                                       child;
+
+        child = crude_entity_from_iterator( &it, i );
+        cJSON_AddItemToArray( children_json, crude_node_manager_node_to_json_hierarchy_( manager, world, child ) );
+      }
+    }
+  }
+
+  return node_json;
+}

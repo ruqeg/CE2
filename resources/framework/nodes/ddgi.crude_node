@@ -1,0 +1,137 @@
+{
+	"name":	"ddgi_develop",
+	"components":	[{
+			"type":	"crude_transform",
+			"translation":	[0, 0, 0],
+			"rotation":	[0, 0, 0, 1],
+			"scale":	[1, 1, 1]
+		}],
+	"children":	[{
+			"name":	"Sponza",
+			"components":	[{
+					"type":	"crude_transform",
+					"translation":	[0, 0, 0],
+					"rotation":	[0, 0, 0, 1],
+					"scale":	[3, 3, 3]
+				}, {
+					"type":	"crude_gltf",
+					"path":	"framework\\models\\Sponza\\glTF\\Sponza.gltf",
+					"animations_instances":	[{
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}]
+				}],
+			"children":	[]
+		}, {
+			"name":	"box",
+			"components":	[{
+					"type":	"crude_transform",
+					"translation":	[49.299999237060547, 28.306758880615234, 0],
+					"rotation":	[0, 0, 0, 1],
+					"scale":	[17.299999237060547, 1, 21.600000381469727]
+				}, {
+					"type":	"crude_gltf",
+					"path":	"game\\dev\\box.gltf",
+					"animations_instances":	[{
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}, {
+							"index":	1,
+							"nodes_enabled_bits":	[-1, -1, -1, -1, -1, -1, -1, -1]
+						}]
+				}],
+			"children":	[]
+		}, {
+			"name":	"light",
+			"components":	[{
+					"type":	"crude_transform",
+					"translation":	[0, 50.611000061035156, -12.746999740600586],
+					"rotation":	[0, 0, 0, 1],
+					"scale":	[1, 1, 1]
+				}, {
+					"type":	"crude_light",
+					"radius":	139,
+					"color":	[1, 1, 1],
+					"intensity":	216
+				}],
+			"children":	[]
+		}, {
+			"name":	"ddgi_area",
+			"components":	[{
+					"type":	"crude_transform",
+					"translation":	[-48.908050537109375, -0.899999976158142, -30.183931350708008],
+					"rotation":	[0, 0, 0, 1],
+					"scale":	[1, 1, 1]
+				}, {
+					"type":	"crude_ddgi_area",
+					"probe_spacing_x":	10,
+					"probe_spacing_y":	4,
+					"probe_spacing_z":	7,
+					"max_probe_offset":	0.40000000596046448,
+					"self_shadow_bias":	0.300000011920929,
+					"hysteresis":	0.949999988079071,
+					"shadow_weight_power":	2.5,
+					"infinite_bounces_multiplier":	0.75,
+					"probe_update_per_frame":	1000,
+					"offsets_calculations_count":	-1,
+					"probe_rays":	128,
+					"probe_count_x":	10,
+					"probe_count_y":	10,
+					"probe_count_z":	10
+				}],
+			"children":	[]
+		}, {
+			"name":	"world_enviroment",
+			"components":	[{
+					"type":	"crude_world_environment",
+					"background_color_x":	0,
+					"background_color_y":	0,
+					"background_color_z":	0,
+					"background_intencity":	0,
+					"ambient_color_x":	0,
+					"ambient_color_y":	0,
+					"ambient_color_z":	0,
+					"ambient_intencity":	0
+				}],
+			"children":	[]
+		}]
+}

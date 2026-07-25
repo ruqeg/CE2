@@ -1,0 +1,507 @@
+{
+  "name": "main_graph",
+  "passes": [
+    {
+      "name": "volumetric_fog_pass",
+      "type": "compute",
+      "inputs": [],
+      "outputs": [
+        {
+          "type": "marker",
+          "name": "volumetric_fog_pass_marker"
+        }
+      ]
+    },
+    {
+      "name": "light_lut_pass",
+      "type": "compute",
+      "inputs": [
+        {
+          "type": "reference",
+          "name": "volumetric_fog_pass_marker"
+        }],
+      "outputs": [
+        {
+          "type": "marker",
+          "name": "light_lut_pass_marker"
+        }
+      ]
+    },
+    {
+      "name": "pointlight_shadows_pass",
+      "type": "compute",
+      "inputs": [
+        {
+          "type": "reference",
+          "name": "light_lut_pass_marker"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "texture",
+          "name": "tetrahedron_shadow_texture",
+          "external": true
+        },
+        {
+          "type": "marker",
+          "name": "pointlight_shadows_pass"
+        }
+      ]
+    },
+    {
+      "name": "culling_early_pass",
+      "type": "compute",
+      "inputs": [],
+      "outputs": [
+        {
+          "type": "marker",
+          "name": "culling_early_pass_marker"
+        }
+      ]
+    },
+    {
+      "name": "opaque_early_pass",
+      "multisample": 1,
+      "inputs": [
+        {
+          "type": "reference",
+          "name": "light_lut_pass_marker"
+        },
+        {
+          "type": "reference",
+          "name": "culling_early_pass_marker"
+        },
+        {
+          "type": "reference",
+          "name": "pointlight_shadows_pass"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "attachment",
+          "name": "direct_radiance",
+          "format": "FORMAT_R16G16B16A16_SFLOAT",
+          "scale": [ 1, 1 ],
+          "op": "clear",
+          "clear_color": [ 0, 0, 0, 1 ]
+        },
+        {
+          "type": "attachment",
+          "name": "direct_normal",
+          "format": "FORMAT_R16G16_UNORM",
+          "scale": [ 1, 1 ],
+          "op": "clear",
+          "clear_color": [ 0, 0, 0, 1 ]
+        },
+        {
+          "type": "attachment",
+          "name": "direct_albedo",
+          "format": "FORMAT_R8G8B8A8_UNORM",
+          "scale": [ 1, 1 ],
+          "op": "clear",
+          "clear_color": [ 0, 0, 0, 1 ]
+        },
+        {
+          "type": "attachment",
+          "name": "depth",
+          "format": "FORMAT_D32_SFLOAT",
+          "scale": [ 1, 1 ],
+          "op": "clear",
+          "clear_depth": 1.0
+        },
+        {
+          "type": "marker",
+          "name": "opaque_early_pass_marker"
+        }
+      ]
+    },
+    {
+      "name": "opaque_terrain_pass",
+      "multisample": 1,
+      "inputs": [
+        {
+          "type": "attachment",
+          "name": "direct_radiance"
+        },
+        {
+          "type": "attachment",
+          "name": "direct_normal"
+        },
+        {
+          "type": "attachment",
+          "name": "direct_albedo"
+        },
+        {
+          "type": "attachment",
+          "name": "depth"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "reference",
+          "name": "direct_radiance"
+        },
+        {
+          "type": "reference",
+          "name": "direct_normal"
+        },
+        {
+          "type": "reference",
+          "name": "direct_albedo"
+        },
+        {
+          "type": "reference",
+          "name": "depth"
+        },
+        {
+          "type": "marker",
+          "name": "opaque_terrain_pass_marker"
+        }
+      ]
+    },
+    {
+      "name": "depth_pyramid_early_pass",
+      "type": "compute",
+      "inputs": [
+        {
+          "type": "texture",
+          "name": "depth"
+        },
+        {
+          "type": "reference",
+          "name": "opaque_early_pass_marker"
+        },
+        {
+          "type": "reference",
+          "name": "opaque_terrain_pass_marker"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "texture",
+          "name": "depth_pyramid",
+          "external": true
+        }
+      ]
+    },
+    {
+      "name": "culling_late_pass",
+      "type": "compute",
+      "inputs": [
+        {
+          "type": "reference",
+          "name": "depth_pyramid"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "marker",
+          "name": "culling_late_pass_marker"
+        }
+      ]
+    },
+    {
+      "name": "opaque_late_pass",
+      "multisample": 1,
+      "inputs": [
+        {
+          "type": "reference",
+          "name": "depth_pyramid"
+        },
+        {
+          "type": "reference",
+          "name": "culling_late_pass_marker"
+        },
+        {
+          "type": "attachment",
+          "name": "direct_radiance"
+        },
+        {
+          "type": "attachment",
+          "name": "direct_normal"
+        },
+        {
+          "type": "attachment",
+          "name": "direct_albedo"
+        },
+        {
+          "type": "attachment",
+          "name": "depth"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "reference",
+          "name": "direct_radiance"
+        },
+        {
+          "type": "reference",
+          "name": "direct_normal"
+        },
+        {
+          "type": "reference",
+          "name": "direct_albedo"
+        },
+        {
+          "type": "reference",
+          "name": "depth"
+        },
+        {
+          "type": "marker",
+          "name": "opaque_late_pass_marker"
+        }
+      ]
+    },
+    {
+      "name": "indirect_light_pass",
+      "type": "ray_tracing",
+      "inputs": [
+        {
+          "type": "reference",
+          "name": "opaque_late_pass_marker"
+        },
+        {
+          "type": "texture",
+          "name": "direct_normal"
+        },
+        {
+          "type": "texture",
+          "name": "depth"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "attachment",
+          "name": "indirect_radiance",
+          "format": "FORMAT_R16G16B16A16_SFLOAT",
+          "scale": [ 1, 1 ]
+        },
+        {
+          "type": "marker",
+          "name": "indirect_light_pass_marker"
+        }
+      ]
+    },
+    {
+      "name": "compose_pass",
+      "type": "compute",
+      "inputs": [
+        {
+          "type": "texture",
+          "name": "direct_radiance"
+        },
+        {
+          "type": "texture",
+          "name": "indirect_radiance"
+        },
+        {
+          "type": "texture",
+          "name": "direct_albedo"
+        },
+        {
+          "type": "reference",
+          "name": "indirect_light_pass_marker"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "attachment",
+          "name": "radiance",
+          "format": "FORMAT_R16G16B16A16_SFLOAT",
+          "scale": [ 1, 1 ],
+          "op": "clear",
+          "clear_color": [ 0, 0, 0, 1 ]
+        },
+        {
+          "type": "marker",
+          "name": "compose_pass_marker"
+        }
+      ]
+    },
+    {
+      "name": "indirect_light_debug_pass",
+      "multisample": 1,
+      "inputs": [
+        {
+          "type": "attachment",
+          "name": "radiance"
+        },
+        {
+          "type": "attachment",
+          "name": "depth"
+        },
+        {
+          "type": "reference",
+          "name": "compose_pass_marker"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "reference",
+          "name": "radiance"
+        },
+        {
+          "type": "reference",
+          "name": "depth"
+        },
+        {
+          "type": "marker",
+          "name": "indirect_light_debug_pass_marker"
+        }
+      ]
+    },
+    {
+      "name": "translucent_pass",
+      "multisample": 1,
+      "inputs": [
+        {
+          "type": "attachment",
+          "name": "radiance"
+        },
+        {
+          "type": "attachment",
+          "name": "depth"
+        },
+        {
+          "type": "reference",
+          "name": "compose_pass_marker"
+        },
+        {
+          "type": "reference",
+          "name": "indirect_light_debug_pass_marker"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "reference",
+          "name": "radiance"
+        },
+        {
+          "type": "reference",
+          "name": "depth"
+        },
+        {
+          "type": "marker",
+          "name": "transparent_pass_marker"
+        }
+      ]
+    },
+    {
+      "name": "postprocessing_pass",
+      "inputs": [
+        {
+          "type": "texture",
+          "name": "radiance"
+        },
+        {
+          "type": "reference",
+          "name": "transparent_pass_marker"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "attachment",
+          "name": "game_final",
+          "format": "FORMAT_R8G8B8A8_UNORM",
+          "scale": [ 1, 1 ],
+          "op": "clear",
+          "clear_color": [ 0, 0, 0, 1 ]
+        }
+      ]
+    },
+    {
+      "name": "debug_pass",
+      "inputs": [
+        {
+          "type": "attachment",
+          "name": "game_final"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "reference",
+          "name": "game_final"
+        },
+        {
+          "type": "marker",
+          "name": "debug_pass_marker"
+        }
+      ]
+    },
+    {
+      "name": "ray_tracing_solid_pass",
+      "type": "ray_tracing",
+      "enabled": 0,
+      "inputs": [
+        {
+          "type": "reference",
+          "name": "debug_pass_marker"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "attachment",
+          "name": "ray_tracing_solid",
+          "format": "FORMAT_R8G8B8A8_UNORM",
+          "scale": [ 1, 1 ]
+        }
+      ]
+    },
+    {
+      "name": "imgui_editor_pass",
+      "enabled": 0,
+      "inputs": [
+        {
+          "type": "reference",
+          "name": "debug_pass_marker"
+        },
+        {
+          "type": "texture",
+          "name": "depth"
+        },
+        {
+          "type": "texture",
+          "name": "radiance"
+        },
+        {
+          "type": "texture",
+          "name": "game_final"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "attachment",
+          "name": "editor_final",
+          "format": "FORMAT_R8G8B8A8_UNORM",
+          "scale": [ 1, 1 ],
+          "op": "clear",
+          "clear_color": [ 0, 0, 0, 1 ]
+        }
+      ]
+    },
+    {
+      "name": "imgui_game_pass",
+      "enabled": 0,
+      "inputs": [
+        {
+          "type": "reference",
+          "name": "debug_pass_marker"
+        },
+        {
+          "type": "texture",
+          "name": "depth"
+        },
+        {
+          "type": "attachment",
+          "name": "game_final"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "reference",
+          "name": "game_final"
+        }
+      ]
+    }
+  ]
+}

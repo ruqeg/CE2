@@ -1,0 +1,34 @@
+{
+  "name" : "fullscreen",
+  "buffers": [
+    {
+      "name": "fullscreen",
+      "filename": "fullscreen.crude_shader",
+      "includes": [
+        "common/platform.h",
+        "common/debug.h",
+        "common/scene.h",
+        "common/light.h"
+      ]
+    }
+  ],
+  "pipelines" : [
+    {
+      "name" : "postprocessing",
+      "render_pass_output":
+      {
+        "reference": "postprocessing_pass" 
+      },
+      "shaders" : [
+        {
+          "stage" : "vertex",
+          "buffer" : "fullscreen"
+        },
+        {
+          "stage" : "fragment",
+          "buffer" : "fullscreen"
+        }
+      ]
+    }
+  ]
+}

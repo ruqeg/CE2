@@ -1,0 +1,175 @@
+#pragma once
+
+#include <engine/core/resource_pool.h>
+#include <engine/core/math.h>
+#include <engine/core/hashmapstr.h>
+#include <engine/audio/audio_device_resources.h>
+
+typedef struct crude_audio_device
+{
+  ma_context                                               lma_context;
+  ma_device                                                lma_device;
+  ma_engine                                                lma_engine;
+  ma_fence                                                 lma_fence;
+  crude_resource_pool                                      sounds_groups;
+  crude_resource_pool                                      sounds;
+  crude_heap_allocator                                    *allocator;
+  char const                                              *resources_absolute_directory;
+  crude_string_buffer                                      absolute_filepath_string_buffer;
+} crude_audio_device;
+
+CRUDE_API void
+crude_audio_device_initialize
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_heap_allocator                                *allocator,
+  _In_ char const                                          *resources_absolute_directory
+);
+
+CRUDE_API void
+crude_audio_device_deinitialize
+(
+  _In_ crude_audio_device                                  *audio
+);
+
+CRUDE_API void
+crude_audio_device_wait_wait_till_uploaded
+(
+  _In_ crude_audio_device                                  *audio
+);
+
+CRUDE_API crude_sound_group_handle
+crude_audio_device_create_sound_group
+(
+  _In_ crude_audio_device                                  *audio
+);
+
+CRUDE_API void
+crude_audio_device_destroy_sound_group
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_group_handle                             sound_group_handle
+);
+
+CRUDE_API void
+crude_audio_device_start_sound_group
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_group_handle                             sound_group_handle
+);
+
+CRUDE_API void
+crude_audio_device_stop_sound_group
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_group_handle                             sound_group_handle
+);
+
+CRUDE_API void
+crude_audio_device_sound_group_set_volume
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_group_handle                             sound_group_handle,
+  _In_ float32                                              volume
+);
+
+CRUDE_API crude_sound_handle
+crude_audio_device_create_sound
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_creation const                          *creation
+);
+
+CRUDE_API void
+crude_audio_device_destroy_sound
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_handle                                   sound_handle
+);
+
+CRUDE_API void
+crude_audio_device_sound_start
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_handle                                   sound_handle
+);
+
+CRUDE_API void
+crude_audio_device_sound_reset
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_handle                                   sound_handle
+);
+
+CRUDE_API void
+crude_audio_device_sound_stop
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_handle                                   sound_handle
+);
+
+CRUDE_API bool
+crude_audio_device_sound_is_playing
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_handle                                   sound_handle
+);
+
+CRUDE_API void
+crude_audio_device_sound_set_translation
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_handle                                   sound_handle,
+  _In_ XMVECTOR                                             translation
+);
+
+CRUDE_API void
+crude_audio_device_sound_set_volume
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_handle                                   sound_handle,
+  _In_ float32                                              volume
+);
+
+CRUDE_API float32
+crude_audio_device_sound_get_volume
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_handle                                   sound_handle
+);
+
+CRUDE_API void
+crude_audio_device_sound_set_attenuation_model
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_handle                                   sound_handle,
+  _In_ crude_audio_sound_attenuation_model                  attenuation_model
+);
+
+CRUDE_API void
+crude_audio_device_listener_set_local_to_world
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ XMMATRIX                                             local_to_world
+);
+
+CRUDE_API void
+crude_audio_device_set_global_volume
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ float32                                              volume
+);
+
+CRUDE_API bool
+crude_audio_device_sound_get_looping
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_handle                                   sound_handle
+);
+
+CRUDE_API crude_audio_sound_positioning
+crude_audio_device_sound_get_positiong
+(
+  _In_ crude_audio_device                                  *audio,
+  _In_ crude_sound_handle                                   sound_handle
+);
